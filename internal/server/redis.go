@@ -17,6 +17,7 @@ import (
 	"github.com/jcalabro/kvdb/internal/metrics"
 	"github.com/jcalabro/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func (s *server) serveRedis(wg *sync.WaitGroup, done <-chan any, args *Args) {
@@ -131,8 +132,7 @@ func (s *server) parseRedisCommand(ctx context.Context, reader *bufio.Reader) (*
 
 	cmd, err := resp.ParseCommand(reader)
 	if err != nil {
-		span.RecordError(err)
-		return nil, err
+		return nil, recordErr(span, err)
 	}
 
 	return cmd, nil
@@ -156,11 +156,8 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 		metrics.QueryDuration.WithLabelValues(cmd.Name, status).Observe(time.Since(start).Seconds())
 	}()
 
-	var (
-		res string
-		err error
-	)
-
+	var res string
+	var err error
 	switch cmdLower {
 	case "ping":
 		res, err = s.handleRedisPing(ctx, cmd.Args)
@@ -254,8 +251,7 @@ func (s *server) handleRedisGet(ctx context.Context, args []resp.Value) (string,
 
 	val, err := s.redisGet(args)
 	if err != nil {
-		span.RecordError(err)
-		return "", err
+		return "", recordErr(span, err)
 	}
 
 	if len(val) == 0 {
@@ -272,8 +268,7 @@ func (s *server) handleRedisExists(ctx context.Context, args []resp.Value) (stri
 
 	val, err := s.redisGet(args)
 	if err != nil {
-		span.RecordError(err)
-		return "", err
+		return "", recordErr(span, err)
 	}
 
 	return formatBoolAsInt(len(val) > 0), nil
@@ -306,12 +301,12 @@ func (s *server) handleRedisSet(ctx context.Context, args []resp.Value) (string,
 
 	key, err := extractStringArg(args[0])
 	if err != nil {
-		return "", fmt.Errorf("failed to parse key argument: %w", err)
+		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
 
 	value, err := extractStringArg(args[1])
 	if err != nil {
-		return "", fmt.Errorf("failed to parse value argument: %w", err)
+		return "", recordErr(span, fmt.Errorf("failed to parse value argument: %w", err))
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
@@ -319,7 +314,7 @@ func (s *server) handleRedisSet(ctx context.Context, args []resp.Value) (string,
 		return nil, nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to set value: %w", err)
+		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
 	}
 
 	return formatSimpleString("OK"), nil
@@ -331,7 +326,7 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 
 	key, err := extractStringArg(args[0])
 	if err != nil {
-		return "", fmt.Errorf("failed to parse key argument: %w", err)
+		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
 
 	exists := false
@@ -346,8 +341,13 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 		return nil, nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to delete value: %w", err)
+		return "", recordErr(span, fmt.Errorf("failed to delete value: %w", err))
 	}
 
 	return formatBoolAsInt(exists), nil
+}
+
+func recordErr(span trace.Span, err error) error {
+	span.RecordError(err)
+	return err
 }
