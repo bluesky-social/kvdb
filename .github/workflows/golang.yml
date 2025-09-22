@@ -1,0 +1,55 @@
+name: golang
+
+on:
+  push:
+    branches:
+      - '**'
+
+concurrency:
+  group: '${{ github.workflow }}-${{ github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.24"
+
+      - name: Install FoundationDB Clients
+        run: |
+          wget -O fdb-clients.deb https://github.com/apple/foundationdb/releases/download/7.3.63/foundationdb-clients_7.3.63-1_amd64.deb
+          sudo dpkg -i fdb-clients.deb
+
+      - name: Stand Up Dependencies
+        run: |
+          just up
+
+      - name: Run Tests
+        run: |
+          just test
+
+      - name: Tear Down Dependencies
+        run: just down
+
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.24"
+
+      - name: Install FoundationDB Clients
+        run: |
+          wget -O fdb-clients.deb https://github.com/apple/foundationdb/releases/download/7.3.63/foundationdb-clients_7.3.63-1_amd64.deb
+          sudo dpkg -i fdb-clients.deb
+
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.0.2
+          args: ./...

@@ -1,0 +1,21 @@
+version: "2"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gocritic:
+      enable-all: true
+
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      rewrite-rules:
+        - pattern: 'interface{}'
+          replacement: 'any'
