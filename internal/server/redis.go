@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/jcalabro/kvdb/internal/metrics"
-	"github.com/jcalabro/kvdb/pkg/serde/resp"
+	"github.com/bluesky-social/kvdb/internal/metrics"
+	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )

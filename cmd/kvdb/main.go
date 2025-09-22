@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jcalabro/kvdb/internal/server"
+	"github.com/bluesky-social/kvdb/internal/server"
 	"github.com/urfave/cli/v3"
 )
 

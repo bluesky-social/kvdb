@@ -1,4 +1,4 @@
-module github.com/jcalabro/kvdb
+module github.com/bluesky-social/kvdb
 
 go 1.24.1
 
