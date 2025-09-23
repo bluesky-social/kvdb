@@ -172,8 +172,6 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 	switch cmdLower {
 	case "ping":
 		res, err = s.handleRedisPing(ctx, cmd.Args)
-	case "select":
-		res, err = s.handleRedisSelect(ctx, cmd.Args)
 	case "get":
 		res, err = s.handleRedisGet(ctx, cmd.Args)
 	case "exists":
@@ -277,23 +275,6 @@ func (s *server) handleRedisPing(ctx context.Context, args []resp.Value) (string
 	}
 
 	return resp, nil
-}
-
-func (s *server) handleRedisSelect(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSelect") // nolint
-	defer span.End()
-
-	if len(args) != 1 {
-		return "", recordErr(span, fmt.Errorf("SELECT requires 1 argument"))
-	}
-
-	// index, err := extractStringArg(args[0])
-	// if err != nil {
-	// 	return "", recordErr(span, fmt.Errorf("failed to parse index argument: %w", err))
-	// }
-
-	// For now, we don't support multiple databases, so always return OK
-	return formatSimpleString("OK"), nil
 }
 
 func (s *server) handleRedisGet(ctx context.Context, args []resp.Value) (string, error) {
