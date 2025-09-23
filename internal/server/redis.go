@@ -338,19 +338,22 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
 
-	exists := false
-	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		val, err := tx.Get(fdb.Key(key)).Get()
 		if err != nil {
 			return nil, err
 		}
-		exists = len(val) > 0
 
 		tx.Clear(fdb.Key(key))
-		return nil, nil
+		return len(val) > 0, nil
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to delete value: %w", err))
+	}
+
+	exists, ok := existsAny.(bool)
+	if !ok {
+		return "", recordErr(span, fmt.Errorf("failed to cast exists of type %T to a bool", existsAny))
 	}
 
 	return formatBoolAsInt(exists), nil
