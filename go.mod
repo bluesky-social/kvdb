@@ -10,7 +10,15 @@ require (
 	go.opentelemetry.io/otel/trace v1.38.0
 )
 
-require github.com/apple/foundationdb/bindings/go v0.0.0-20250221231555-5140696da2df
+require (
+	github.com/RoaringBitmap/roaring/v2 v2.10.0
+	github.com/apple/foundationdb/bindings/go v0.0.0-20250221231555-5140696da2df
+)
+
+require (
+	github.com/bits-and-blooms/bitset v1.12.0 // indirect
+	github.com/mschoch/smat v0.2.0 // indirect
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

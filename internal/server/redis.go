@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	roaring "github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
@@ -79,6 +81,24 @@ func formatSimpleString(str string) string {
 
 func formatBulkString(str string) string {
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(str), str)
+}
+
+func formatArrayOfBulkStrings(strs []string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("*%d\r\n", len(strs)))
+	for _, str := range strs {
+		b.WriteString(formatBulkString(str))
+	}
+	return b.String()
+}
+
+func formatSetOfBulkStrings(strs []string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("~%d\r\n", len(strs)))
+	for _, str := range strs {
+		b.WriteString(formatBulkString(str))
+	}
+	return b.String()
 }
 
 func formatNil() string {
@@ -169,6 +189,18 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 		res, err = s.handleRedisSet(ctx, cmd.Args)
 	case "del":
 		res, err = s.handleRedisDelete(ctx, cmd.Args)
+	case "sadd":
+		res, err = s.redisSetAdd(ctx, cmd.Args)
+	case "srem":
+		res, err = s.redisSetRemove(ctx, cmd.Args)
+	case "sismember":
+		res, err = s.redisSetIsMember(ctx, cmd.Args)
+	case "scard":
+		res, err = s.redisSetCard(ctx, cmd.Args)
+	case "smembers":
+		res, err = s.redisSetMembers(ctx, cmd.Args)
+	case "sinter":
+		res, err = s.redisSetInter(ctx, cmd.Args)
 	case "quit":
 		res = "+OK\r\n"
 	default:
@@ -345,6 +377,495 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 	}
 
 	return formatBoolAsInt(exists), nil
+}
+
+// implement sets as serialized Roaring Bitmaps with interned keys we store in FDB
+
+func (s *server) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "allocateNewUID") // nolint
+	defer span.End()
+
+	// use a special key to store the last allocated UID
+	const uidKey = "uid_alloc"
+
+	var newUID uint64
+	val, err := tx.Get(fdb.Key(uidKey)).Get()
+	if err != nil {
+		return 0, recordErr(span, fmt.Errorf("failed to get last UID: %w", err))
+	}
+	if len(val) == 0 {
+		newUID = 1 // start from 1
+	} else {
+		lastUID, err := strconv.ParseUint(string(val), 10, 64)
+		if err != nil {
+			return 0, recordErr(span, fmt.Errorf("failed to parse last UID: %w", err))
+		}
+		newUID = lastUID + 1
+	}
+
+	tx.Set(fdb.Key(uidKey), []byte(strconv.FormatUint(newUID, 10)))
+	return newUID, nil
+}
+
+func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "getUID") // nolint
+	defer span.End()
+
+	var memberToUIDKey = "member_to_uid/" + member
+
+	var uid uint64
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(val) == 0 {
+			// key does not exist yet, allocate a new UID
+			uid, err = s.allocateNewUID(ctx, tx)
+			if err != nil {
+				return nil, err
+			}
+			uidStr := strconv.FormatUint(uid, 10)
+			tx.Set(fdb.Key(memberToUIDKey), []byte(uidStr))
+
+			var uidToMemberKey = "uid_to_member/" + uidStr
+			tx.Set(fdb.Key(uidToMemberKey), []byte(member))
+
+			return uid, nil
+		}
+
+		// parse existing UID
+		uid, err = strconv.ParseUint(string(val), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse existing UID: %w", err)
+		}
+		return uid, nil
+	})
+	if err != nil {
+		return 0, recordErr(span, fmt.Errorf("failed to get or create UID: %w", err))
+	}
+
+	uid, ok := res.(uint64)
+	if !ok {
+		return 0, recordErr(span, fmt.Errorf("invalid UID type: %T", res))
+	}
+
+	return uid, nil
+}
+
+func (s *server) uidToMember(ctx context.Context, uid uint64) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "uidToMember") // nolint
+	defer span.End()
+
+	uidStr := strconv.FormatUint(uid, 10)
+	var uidToMemberKey = "uid_to_member/" + uidStr
+
+	var member string
+	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		val, err := tx.Get(fdb.Key(uidToMemberKey)).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(val) == 0 {
+			return nil, fmt.Errorf("UID %d not found", uid)
+		}
+		member = string(val)
+		return member, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
+	}
+
+	member, ok := res.(string)
+	if !ok {
+		return "", recordErr(span, fmt.Errorf("invalid member type: %T", res))
+	}
+
+	return member, nil
+}
+
+func (s *server) redisSetAdd(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetAdd") // nolint
+	defer span.End()
+
+	if len(args) < 2 {
+		return "", fmt.Errorf("SADD requires at least 2 arguments")
+	}
+
+	setKey, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	var members []string
+	for _, arg := range args[1:] {
+		member, err := extractStringArg(arg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse member argument: %w", err))
+		}
+		members = append(members, member)
+	}
+
+	if len(members) == 0 {
+		return "", nil
+	}
+
+	added := 0
+	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// get or create the set's bitmap
+		bitmapKey := "set/" + setKey
+		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		var bitmap *roaring.Bitmap
+		if len(val) == 0 {
+			bitmap = roaring.New()
+		} else {
+			bitmap = roaring.New()
+			if err := bitmap.UnmarshalBinary(val); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+			}
+		}
+
+		for _, member := range members {
+			uid, err := s.getUID(ctx, member)
+			if err != nil {
+				return nil, err
+			}
+			if !bitmap.Contains(uid) {
+				bitmap.Add(uid)
+				added++
+			}
+		}
+
+		// serialize and store the updated bitmap
+		data, err := bitmap.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal bitmap: %w", err)
+		}
+		tx.Set(fdb.Key(bitmapKey), data)
+
+		return nil, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
+	}
+
+	return formatInt(added), nil
+}
+
+func (s *server) redisSetRemove(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetRemove") // nolint
+	defer span.End()
+
+	if len(args) < 2 {
+		return "", fmt.Errorf("SREM requires at least 2 arguments")
+	}
+
+	setKey, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	var members []string
+	for _, arg := range args[1:] {
+		member, err := extractStringArg(arg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse member argument: %w", err))
+		}
+		members = append(members, member)
+	}
+
+	if len(members) == 0 {
+		return formatInt(0), nil
+	}
+
+	removed := 0
+	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// get the set's bitmap
+		bitmapKey := "set/" + setKey
+		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(val) == 0 {
+			// set does not exist, nothing to remove
+			return nil, nil
+		}
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(val); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+		}
+
+		for _, member := range members {
+			uid, err := s.getUID(ctx, member)
+			if err != nil {
+				return nil, err
+			}
+			if bitmap.Contains(uid) {
+				bitmap.Remove(uid)
+				removed++
+			}
+		}
+
+		// serialize and store the updated bitmap
+		data, err := bitmap.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal bitmap: %w", err)
+		}
+		tx.Set(fdb.Key(bitmapKey), data)
+
+		return nil, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
+	}
+
+	return formatInt(removed), nil
+}
+
+func (s *server) redisSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetIsMember") // nolint
+	defer span.End()
+
+	if len(args) != 2 {
+		return "", fmt.Errorf("SISMEMBER requires exactly 2 arguments")
+	}
+
+	setKey, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	member, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse member argument: %w", err))
+	}
+
+	uid, err := s.getUID(ctx, member)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get UID for member: %w", err))
+	}
+
+	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		// get the set's bitmap
+		bitmapKey := "set/" + setKey
+		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(val) == 0 {
+			// set does not exist, member cannot be present
+			return false, nil
+		}
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(val); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+		}
+
+		return bitmap.Contains(uid), nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to check membership: %w", err))
+	}
+
+	isMember, ok := res.(bool)
+	if !ok {
+		return "", recordErr(span, fmt.Errorf("invalid isMember type: %T", res))
+	}
+
+	return formatBoolAsInt(isMember), nil
+}
+
+func (s *server) redisSetCard(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetCard") // nolint
+	defer span.End()
+
+	if len(args) != 1 {
+		return "", fmt.Errorf("SCARD requires exactly 1 argument")
+	}
+
+	setKey, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		// get the set's bitmap
+		bitmapKey := "set/" + setKey
+		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(val) == 0 {
+			// set does not exist, cardinality is 0
+			return 0, nil
+		}
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(val); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+		}
+
+		return int(bitmap.GetCardinality()), nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get set cardinality: %w", err))
+	}
+
+	card, ok := res.(int)
+	if !ok {
+		return "", recordErr(span, fmt.Errorf("invalid cardinality type: %T", res))
+	}
+
+	return formatInt(card), nil
+}
+
+func (s *server) redisSetMembers(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetMembers") // nolint
+	defer span.End()
+
+	if len(args) != 1 {
+		return "", fmt.Errorf("SMEMBERS requires exactly 1 argument")
+	}
+
+	setKey, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	var members []string
+	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		// get the set's bitmap
+		bitmapKey := "set/" + setKey
+		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(val) == 0 {
+			// set does not exist, return empty list
+			members = []string{}
+			return nil, nil
+		}
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(val); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+		}
+
+		return bitmap, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get set members: %w", err))
+	}
+
+	bitmap, ok := res.(*roaring.Bitmap)
+	if !ok {
+		return "", recordErr(span, fmt.Errorf("invalid bitmap type: %T", res))
+	}
+
+	if bitmap == nil || bitmap.IsEmpty() {
+		return formatArrayOfBulkStrings([]string{}), nil
+	}
+
+	slog.Info("bitmap members", "count", bitmap.GetCardinality())
+
+	// convert UIDs back to members
+	for _, uid := range bitmap.ToArray() {
+		member, err := s.uidToMember(ctx, uid)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
+		}
+		members = append(members, member)
+	}
+
+	return formatArrayOfBulkStrings(members), nil
+}
+
+func (s *server) redisSetInter(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetInter") // nolint
+	defer span.End()
+
+	var setKeys []string
+	for _, arg := range args {
+		setKey, err := extractStringArg(arg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+		}
+		setKeys = append(setKeys, setKey)
+	}
+
+	if len(setKeys) == 0 {
+		return "", nil
+	}
+
+	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		var resultBitmap *roaring.Bitmap
+		for i, setKey := range setKeys {
+			// get the set's bitmap
+			bitmapKey := "set/" + setKey
+			val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+			if err != nil {
+				return nil, err
+			}
+
+			var bitmap *roaring.Bitmap
+			if len(val) == 0 {
+				// set does not exist, intersection is empty
+				return roaring.New(), nil
+			}
+
+			bitmap = roaring.New()
+			if err := bitmap.UnmarshalBinary(val); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+			}
+
+			if i == 0 {
+				// first set, initialize resultBitmap
+				resultBitmap = bitmap
+			} else {
+				resultBitmap.And(bitmap)
+			}
+
+			// if at any point the intersection is empty, we can stop early
+			if resultBitmap.IsEmpty() {
+				break
+			}
+		}
+		return resultBitmap, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to compute set intersection: %w", err))
+	}
+
+	resultBitmap, ok := res.(*roaring.Bitmap)
+	if !ok {
+		return "", recordErr(span, fmt.Errorf("invalid bitmap type: %T", res))
+	}
+
+	if resultBitmap == nil || resultBitmap.IsEmpty() {
+		return "", nil
+	}
+
+	// convert UIDs back to members
+	var members []string
+	for _, uid := range resultBitmap.ToArray() {
+		member, err := s.uidToMember(ctx, uid)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
+		}
+		members = append(members, member)
+	}
+
+	return formatArrayOfBulkStrings(members), nil
 }
 
 func recordErr(span trace.Span, err error) error {

@@ -54,7 +54,7 @@ func main() {
 					},
 					&cli.StringFlag{
 						Name:  "redis-addr",
-						Value: "0.0.0.0:6379",
+						Value: "0.0.0.0:6385",
 						Usage: "bind address of the redis front end",
 					},
 					&cli.StringFlag{
