@@ -86,14 +86,14 @@ func formatNil() string {
 }
 
 func formatBoolAsInt(val bool) string {
-	n := 0
+	n := int64(0)
 	if val {
 		n = 1
 	}
 	return formatInt(n)
 }
 
-func formatInt(n int) string {
+func formatInt(n int64) string {
 	return fmt.Sprintf(":%d\r\n", n)
 }
 
@@ -169,6 +169,10 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 		res, err = s.handleRedisSet(ctx, cmd.Args)
 	case "del":
 		res, err = s.handleRedisDelete(ctx, cmd.Args)
+	case "incr":
+		res, err = s.handleRedisIncr(ctx, cmd.Args)
+	case "decr":
+		res, err = s.handleRedisDecr(ctx, cmd.Args)
 	case "quit":
 		res = "+OK\r\n"
 	default:
@@ -226,6 +230,11 @@ func extractStringArg(val resp.Value) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported type for string conversion: %v", val.Type)
 	}
+}
+
+func recordErr(span trace.Span, err error) error {
+	span.RecordError(err)
+	return err
 }
 
 func (s *server) handleRedisPing(ctx context.Context, args []resp.Value) (string, error) {
@@ -347,7 +356,75 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 	return formatBoolAsInt(exists), nil
 }
 
-func recordErr(span trace.Span, err error) error {
-	span.RecordError(err)
-	return err
+func (s *server) handleRedisIncr(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisIncr")
+	defer span.End()
+
+	res, err := s.handleRedisIncrDecr(ctx, args, true)
+	if err != nil {
+		span.RecordError(err)
+		return "", err
+	}
+
+	return res, nil
+}
+
+func (s *server) handleRedisDecr(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisDecr")
+	defer span.End()
+
+	res, err := s.handleRedisIncrDecr(ctx, args, false)
+	if err != nil {
+		span.RecordError(err)
+		return "", err
+	}
+
+	return res, nil
+}
+
+func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, incr bool) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisIncrDecr") // nolint
+	defer span.End()
+
+	k, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
+	}
+	key := fdb.Key(k)
+
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		val, err := tx.Get(fdb.Key(key)).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(val) == 0 {
+			// item does not yet exist
+			val = []byte("0")
+		}
+
+		n, err := strconv.ParseInt(string(val), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse value to int")
+		}
+
+		if incr {
+			n += 1
+		} else {
+			n -= 1
+		}
+
+		tx.Set(key, []byte(strconv.FormatInt(n, 10)))
+		return n, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to incr value: %w", err))
+	}
+
+	n, ok := res.(int64)
+	if !ok {
+		return "", recordErr(span, fmt.Errorf("failed to cast result of type %T to int64", res))
+	}
+
+	return formatInt(n), nil
 }
