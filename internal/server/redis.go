@@ -165,7 +165,6 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 	defer func() {
 		metrics.Queries.WithLabelValues(cmd.Name, status).Inc()
 		metrics.QueryDuration.WithLabelValues(cmd.Name, status).Observe(time.Since(start).Seconds())
-		s.log.Info("handled redis command", "cmd", cmd.Name, "num_args", len(cmd.Args), "status", status, "duration", time.Since(start).String())
 	}()
 
 	var res string
