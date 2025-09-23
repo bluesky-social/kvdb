@@ -277,6 +277,23 @@ func (s *server) handleRedisPing(ctx context.Context, args []resp.Value) (string
 	return resp, nil
 }
 
+func (s *server) handleRedisSelect(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSelect") // nolint
+	defer span.End()
+
+	if len(args) != 1 {
+		return "", recordErr(span, fmt.Errorf("SELECT requires 1 argument"))
+	}
+
+	// index, err := extractStringArg(args[0])
+	// if err != nil {
+	// 	return "", recordErr(span, fmt.Errorf("failed to parse index argument: %w", err))
+	// }
+
+	// For now, we don't support multiple databases, so always return OK
+	return formatSimpleString("OK"), nil
+}
+
 func (s *server) handleRedisGet(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisGet") // nolint
 	defer span.End()
@@ -794,10 +811,6 @@ func (s *server) handleRedisSetMembers(ctx context.Context, args []resp.Value) (
 		return "", recordErr(span, fmt.Errorf("failed to get set members: %w", err))
 	}
 
-	if len(members) == 0 {
-		return formatNil(), nil
-	}
-
 	return formatArrayOfBulkStrings(members), nil
 }
 
@@ -874,10 +887,6 @@ func (s *server) handleRedisSetInter(ctx context.Context, args []resp.Value) (st
 	members, err := s.redisSetInter(ctx, setKeys)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to compute set intersection: %w", err))
-	}
-
-	if len(members) == 0 {
-		return formatNil(), nil
 	}
 
 	return formatArrayOfBulkStrings(members), nil
