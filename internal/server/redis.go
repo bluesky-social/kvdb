@@ -190,17 +190,17 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 	case "del":
 		res, err = s.handleRedisDelete(ctx, cmd.Args)
 	case "sadd":
-		res, err = s.redisSetAdd(ctx, cmd.Args)
+		res, err = s.handleRedisSetAdd(ctx, cmd.Args)
 	case "srem":
-		res, err = s.redisSetRemove(ctx, cmd.Args)
+		res, err = s.handleRedisSetRemove(ctx, cmd.Args)
 	case "sismember":
-		res, err = s.redisSetIsMember(ctx, cmd.Args)
+		res, err = s.handleRedisSetIsMember(ctx, cmd.Args)
 	case "scard":
-		res, err = s.redisSetCard(ctx, cmd.Args)
+		res, err = s.handleRedisSetCard(ctx, cmd.Args)
 	case "smembers":
-		res, err = s.redisSetMembers(ctx, cmd.Args)
+		res, err = s.handleRedisSetMembers(ctx, cmd.Args)
 	case "sinter":
-		res, err = s.redisSetInter(ctx, cmd.Args)
+		res, err = s.handleRedisSetInter(ctx, cmd.Args)
 	case "quit":
 		res = "+OK\r\n"
 	default:
@@ -484,12 +484,12 @@ func (s *server) uidToMember(ctx context.Context, uid uint64) (string, error) {
 	return member, nil
 }
 
-func (s *server) redisSetAdd(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "redisSetAdd") // nolint
+func (s *server) handleRedisSetAdd(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSetAdd") // nolint
 	defer span.End()
 
 	if len(args) < 2 {
-		return "", fmt.Errorf("SADD requires at least 2 arguments")
+		return "", recordErr(span, fmt.Errorf("SADD requires at least 2 arguments"))
 	}
 
 	setKey, err := extractStringArg(args[0])
@@ -506,12 +506,24 @@ func (s *server) redisSetAdd(ctx context.Context, args []resp.Value) (string, er
 		members = append(members, member)
 	}
 
+	added, err := s.redisSetAdd(ctx, setKey, members)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
+	}
+
+	return formatInt(added), nil
+}
+
+func (s *server) redisSetAdd(ctx context.Context, setKey string, members []string) (int, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetAdd") // nolint
+	defer span.End()
+
 	if len(members) == 0 {
-		return "", nil
+		return 0, nil
 	}
 
 	added := 0
-	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+	_, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get or create the set's bitmap
 		bitmapKey := "set/" + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
@@ -550,18 +562,18 @@ func (s *server) redisSetAdd(ctx context.Context, args []resp.Value) (string, er
 		return nil, nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
+		return 0, recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
 	}
 
-	return formatInt(added), nil
+	return added, nil
 }
 
-func (s *server) redisSetRemove(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "redisSetRemove") // nolint
+func (s *server) handleRedisSetRemove(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSetRemove") // nolint
 	defer span.End()
 
 	if len(args) < 2 {
-		return "", fmt.Errorf("SREM requires at least 2 arguments")
+		return "", recordErr(span, fmt.Errorf("SREM requires at least 2 arguments"))
 	}
 
 	setKey, err := extractStringArg(args[0])
@@ -578,12 +590,24 @@ func (s *server) redisSetRemove(ctx context.Context, args []resp.Value) (string,
 		members = append(members, member)
 	}
 
+	removed, err := s.redisSetRemove(ctx, setKey, members)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
+	}
+
+	return formatInt(removed), nil
+}
+
+func (s *server) redisSetRemove(ctx context.Context, setKey string, members []string) (int, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetRemove") // nolint
+	defer span.End()
+
 	if len(members) == 0 {
-		return formatInt(0), nil
+		return 0, nil
 	}
 
 	removed := 0
-	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+	_, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get the set's bitmap
 		bitmapKey := "set/" + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
@@ -622,18 +646,18 @@ func (s *server) redisSetRemove(ctx context.Context, args []resp.Value) (string,
 		return nil, nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
+		return 0, recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
 	}
 
-	return formatInt(removed), nil
+	return removed, nil
 }
 
-func (s *server) redisSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "redisSetIsMember") // nolint
+func (s *server) handleRedisSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSetIsMember") // nolint
 	defer span.End()
 
 	if len(args) != 2 {
-		return "", fmt.Errorf("SISMEMBER requires exactly 2 arguments")
+		return "", recordErr(span, fmt.Errorf("SISMEMBER requires exactly 2 arguments"))
 	}
 
 	setKey, err := extractStringArg(args[0])
@@ -646,9 +670,21 @@ func (s *server) redisSetIsMember(ctx context.Context, args []resp.Value) (strin
 		return "", recordErr(span, fmt.Errorf("failed to parse member argument: %w", err))
 	}
 
+	isMember, err := s.redisSetIsMember(ctx, setKey, member)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to check membership: %w", err))
+	}
+
+	return formatBoolAsInt(isMember), nil
+}
+
+func (s *server) redisSetIsMember(ctx context.Context, setKey string, member string) (bool, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetIsMember") // nolint
+	defer span.End()
+
 	uid, err := s.getUID(ctx, member)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to get UID for member: %w", err))
+		return false, recordErr(span, fmt.Errorf("failed to get UID for member: %w", err))
 	}
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
@@ -672,29 +708,41 @@ func (s *server) redisSetIsMember(ctx context.Context, args []resp.Value) (strin
 		return bitmap.Contains(uid), nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to check membership: %w", err))
+		return false, recordErr(span, fmt.Errorf("failed to check membership: %w", err))
 	}
 
 	isMember, ok := res.(bool)
 	if !ok {
-		return "", recordErr(span, fmt.Errorf("invalid isMember type: %T", res))
+		return false, recordErr(span, fmt.Errorf("invalid isMember type: %T", res))
 	}
 
-	return formatBoolAsInt(isMember), nil
+	return isMember, nil
 }
 
-func (s *server) redisSetCard(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "redisSetCard") // nolint
+func (s *server) handleRedisSetCard(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSetCard") // nolint
 	defer span.End()
 
 	if len(args) != 1 {
-		return "", fmt.Errorf("SCARD requires exactly 1 argument")
+		return "", recordErr(span, fmt.Errorf("SCARD requires exactly 1 argument"))
 	}
 
 	setKey, err := extractStringArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
+
+	card, err := s.redisSetCard(ctx, setKey)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get set cardinality: %w", err))
+	}
+
+	return formatInt(card), nil
+}
+
+func (s *server) redisSetCard(ctx context.Context, setKey string) (int, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetCard") // nolint
+	defer span.End()
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the set's bitmap
@@ -717,29 +765,45 @@ func (s *server) redisSetCard(ctx context.Context, args []resp.Value) (string, e
 		return int(bitmap.GetCardinality()), nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to get set cardinality: %w", err))
+		return 0, recordErr(span, fmt.Errorf("failed to get set cardinality: %w", err))
 	}
 
 	card, ok := res.(int)
 	if !ok {
-		return "", recordErr(span, fmt.Errorf("invalid cardinality type: %T", res))
+		return 0, recordErr(span, fmt.Errorf("invalid cardinality type: %T", res))
 	}
 
-	return formatInt(card), nil
+	return card, nil
 }
 
-func (s *server) redisSetMembers(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "redisSetMembers") // nolint
+func (s *server) handleRedisSetMembers(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSetMembers") // nolint
 	defer span.End()
 
 	if len(args) != 1 {
-		return "", fmt.Errorf("SMEMBERS requires exactly 1 argument")
+		return "", recordErr(span, fmt.Errorf("SMEMBERS requires exactly 1 argument"))
 	}
 
 	setKey, err := extractStringArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
+
+	members, err := s.redisSetMembers(ctx, setKey)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get set members: %w", err))
+	}
+
+	if len(members) == 0 {
+		return formatNil(), nil
+	}
+
+	return formatArrayOfBulkStrings(members), nil
+}
+
+func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetMembers") // nolint
+	defer span.End()
 
 	var members []string
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
@@ -764,16 +828,16 @@ func (s *server) redisSetMembers(ctx context.Context, args []resp.Value) (string
 		return bitmap, nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to get set members: %w", err))
+		return nil, recordErr(span, fmt.Errorf("failed to get set members: %w", err))
 	}
 
 	bitmap, ok := res.(*roaring.Bitmap)
 	if !ok {
-		return "", recordErr(span, fmt.Errorf("invalid bitmap type: %T", res))
+		return nil, recordErr(span, fmt.Errorf("invalid bitmap type: %T", res))
 	}
 
 	if bitmap == nil || bitmap.IsEmpty() {
-		return formatArrayOfBulkStrings([]string{}), nil
+		return []string{}, nil
 	}
 
 	slog.Info("bitmap members", "count", bitmap.GetCardinality())
@@ -782,17 +846,21 @@ func (s *server) redisSetMembers(ctx context.Context, args []resp.Value) (string
 	for _, uid := range bitmap.ToArray() {
 		member, err := s.uidToMember(ctx, uid)
 		if err != nil {
-			return "", recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
+			return nil, recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
 		}
 		members = append(members, member)
 	}
 
-	return formatArrayOfBulkStrings(members), nil
+	return members, nil
 }
 
-func (s *server) redisSetInter(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "redisSetInter") // nolint
+func (s *server) handleRedisSetInter(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSetInter") // nolint
 	defer span.End()
+
+	if len(args) < 1 {
+		return "", recordErr(span, fmt.Errorf("SINTER requires at least 1 argument"))
+	}
 
 	var setKeys []string
 	for _, arg := range args {
@@ -803,8 +871,24 @@ func (s *server) redisSetInter(ctx context.Context, args []resp.Value) (string, 
 		setKeys = append(setKeys, setKey)
 	}
 
+	members, err := s.redisSetInter(ctx, setKeys)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to compute set intersection: %w", err))
+	}
+
+	if len(members) == 0 {
+		return formatNil(), nil
+	}
+
+	return formatArrayOfBulkStrings(members), nil
+}
+
+func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetInter") // nolint
+	defer span.End()
+
 	if len(setKeys) == 0 {
-		return "", nil
+		return []string{}, nil
 	}
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
@@ -843,16 +927,16 @@ func (s *server) redisSetInter(ctx context.Context, args []resp.Value) (string, 
 		return resultBitmap, nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to compute set intersection: %w", err))
+		return nil, recordErr(span, fmt.Errorf("failed to compute set intersection: %w", err))
 	}
 
 	resultBitmap, ok := res.(*roaring.Bitmap)
 	if !ok {
-		return "", recordErr(span, fmt.Errorf("invalid bitmap type: %T", res))
+		return nil, recordErr(span, fmt.Errorf("invalid bitmap type: %T", res))
 	}
 
 	if resultBitmap == nil || resultBitmap.IsEmpty() {
-		return "", nil
+		return []string{}, nil
 	}
 
 	// convert UIDs back to members
@@ -860,12 +944,12 @@ func (s *server) redisSetInter(ctx context.Context, args []resp.Value) (string, 
 	for _, uid := range resultBitmap.ToArray() {
 		member, err := s.uidToMember(ctx, uid)
 		if err != nil {
-			return "", recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
+			return nil, recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
 		}
 		members = append(members, member)
 	}
 
-	return formatArrayOfBulkStrings(members), nil
+	return members, nil
 }
 
 func recordErr(span trace.Span, err error) error {
