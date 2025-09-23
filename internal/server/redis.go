@@ -505,7 +505,6 @@ func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 
 	var memberToUIDKey = "member_to_uid/" + member
 
-	var uid uint64
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
 		if err != nil {
@@ -513,7 +512,7 @@ func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 		}
 		if len(val) == 0 {
 			// key does not exist yet, allocate a new UID
-			uid, err = s.allocateNewUID(ctx, tx)
+			uid, err := s.allocateNewUID(ctx, tx)
 			if err != nil {
 				return nil, err
 			}
@@ -527,7 +526,7 @@ func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 		}
 
 		// parse existing UID
-		uid, err = strconv.ParseUint(string(val), 10, 64)
+		uid, err := strconv.ParseUint(string(val), 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse existing UID: %w", err)
 		}
@@ -614,8 +613,16 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		return 0, nil
 	}
 
-	added := int64(0)
-	_, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+	uids := make([]uint64, len(members))
+	for i, member := range members {
+		uid, err := s.getUID(ctx, member)
+		if err != nil {
+			return 0, recordErr(span, fmt.Errorf("failed to get UID for member %q: %w", member, err))
+		}
+		uids[i] = uid
+	}
+
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get or create the set's bitmap
 		bitmapKey := "set/" + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
@@ -633,11 +640,8 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 			}
 		}
 
-		for _, member := range members {
-			uid, err := s.getUID(ctx, member)
-			if err != nil {
-				return nil, err
-			}
+		added := int64(0)
+		for _, uid := range uids {
 			if !bitmap.Contains(uid) {
 				bitmap.Add(uid)
 				added++
@@ -651,10 +655,15 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		}
 		tx.Set(fdb.Key(bitmapKey), data)
 
-		return nil, nil
+		return added, nil
 	})
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
+	}
+
+	added, ok := res.(int64)
+	if !ok {
+		return 0, recordErr(span, fmt.Errorf("invalid added type: %T", res))
 	}
 
 	return added, nil
@@ -698,8 +707,16 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 		return 0, nil
 	}
 
-	removed := int64(0)
-	_, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+	uids := make([]uint64, len(members))
+	for i, member := range members {
+		uid, err := s.getUID(ctx, member)
+		if err != nil {
+			return 0, recordErr(span, fmt.Errorf("failed to get UID for member %q: %w", member, err))
+		}
+		uids[i] = uid
+	}
+
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get the set's bitmap
 		bitmapKey := "set/" + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
@@ -717,11 +734,8 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 		}
 
-		for _, member := range members {
-			uid, err := s.getUID(ctx, member)
-			if err != nil {
-				return nil, err
-			}
+		removed := int64(0)
+		for _, uid := range uids {
 			if bitmap.Contains(uid) {
 				bitmap.Remove(uid)
 				removed++
@@ -735,10 +749,15 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 		}
 		tx.Set(fdb.Key(bitmapKey), data)
 
-		return nil, nil
+		return removed, nil
 	})
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
+	}
+
+	removed, ok := res.(int64)
+	if !ok {
+		return 0, recordErr(span, fmt.Errorf("invalid removed type: %T", res))
 	}
 
 	return removed, nil
@@ -854,6 +873,7 @@ func (s *server) redisSetCard(ctx context.Context, setKey string) (int64, error)
 			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 		}
 
+		// uint64 to int64 conversion, beware of overflow though incredibly unlikely
 		return int64(bitmap.GetCardinality()), nil
 	})
 	if err != nil {
@@ -893,7 +913,6 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 	ctx, span := s.tracer.Start(ctx, "redisSetMembers") // nolint
 	defer span.End()
 
-	var members []string
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the set's bitmap
 		bitmapKey := "set/" + setKey
@@ -903,8 +922,7 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 		}
 
 		if len(val) == 0 {
-			// set does not exist, return empty list
-			members = []string{}
+			// set does not exist
 			return nil, nil
 		}
 
@@ -931,12 +949,14 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 	slog.Info("bitmap members", "count", bitmap.GetCardinality())
 
 	// convert UIDs back to members
-	for _, uid := range bitmap.ToArray() {
+	uids := bitmap.ToArray()
+	members := make([]string, len(uids))
+	for i, uid := range uids {
 		member, err := s.uidToMember(ctx, uid)
 		if err != nil {
 			return nil, recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
 		}
-		members = append(members, member)
+		members[i] = member
 	}
 
 	return members, nil
@@ -1024,13 +1044,15 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 	}
 
 	// convert UIDs back to members
-	var members []string
-	for _, uid := range resultBitmap.ToArray() {
+	uids := resultBitmap.ToArray()
+	members := make([]string, len(uids))
+
+	for i, uid := range uids {
 		member, err := s.uidToMember(ctx, uid)
 		if err != nil {
 			return nil, recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
 		}
-		members = append(members, member)
+		members[i] = member
 	}
 
 	return members, nil
