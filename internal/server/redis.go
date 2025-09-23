@@ -454,10 +454,8 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, inc
 
 // implement sets as serialized Roaring Bitmaps with interned keys we store in FDB
 
-func (s *server) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint64, error) {
-	ctx, span := s.tracer.Start(ctx, "allocateNewUID") // nolint
-	defer span.End()
-
+func (s *server) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, error) {
+	span.AddEvent("allocateNewUID")
 	// use a special key to store the last allocated UID
 	const uidKey = "uid_alloc"
 
@@ -493,7 +491,7 @@ func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 		}
 		if len(val) == 0 {
 			// key does not exist yet, allocate a new UID
-			uid, err := s.allocateNewUID(ctx, tx)
+			uid, err := s.allocateNewUID(span, tx)
 			if err != nil {
 				return nil, err
 			}
