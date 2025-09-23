@@ -171,8 +171,12 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 		res, err = s.handleRedisDelete(ctx, cmd.Args)
 	case "incr":
 		res, err = s.handleRedisIncr(ctx, cmd.Args)
+	case "incrby":
+		res, err = s.handleRedisIncrBy(ctx, cmd.Args)
 	case "decr":
 		res, err = s.handleRedisDecr(ctx, cmd.Args)
+	case "decrby":
+		res, err = s.handleRedisDecrBy(ctx, cmd.Args)
 	case "quit":
 		res = "+OK\r\n"
 	default:
@@ -360,7 +364,34 @@ func (s *server) handleRedisIncr(ctx context.Context, args []resp.Value) (string
 	ctx, span := s.tracer.Start(ctx, "handleRedisIncr")
 	defer span.End()
 
-	res, err := s.handleRedisIncrDecr(ctx, args, true)
+	res, err := s.handleRedisIncrDecr(ctx, args, 1)
+	if err != nil {
+		span.RecordError(err)
+		return "", err
+	}
+
+	return res, nil
+}
+
+func (s *server) handleRedisIncrBy(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisIncrBy")
+	defer span.End()
+
+	if len(args) != 2 {
+		return "", recordErr(span, fmt.Errorf("incorrect number of arguments for incrby"))
+	}
+
+	incr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse increment argument: %w", err))
+	}
+
+	by, err := strconv.ParseInt(incr, 10, 64)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse increment argument to int: %w", err))
+	}
+
+	res, err := s.handleRedisIncrDecr(ctx, args, by)
 	if err != nil {
 		span.RecordError(err)
 		return "", err
@@ -373,7 +404,7 @@ func (s *server) handleRedisDecr(ctx context.Context, args []resp.Value) (string
 	ctx, span := s.tracer.Start(ctx, "handleRedisDecr")
 	defer span.End()
 
-	res, err := s.handleRedisIncrDecr(ctx, args, false)
+	res, err := s.handleRedisIncrDecr(ctx, args, -1)
 	if err != nil {
 		span.RecordError(err)
 		return "", err
@@ -382,7 +413,37 @@ func (s *server) handleRedisDecr(ctx context.Context, args []resp.Value) (string
 	return res, nil
 }
 
-func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, incr bool) (string, error) {
+func (s *server) handleRedisDecrBy(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisDecrBy")
+	defer span.End()
+
+	if len(args) != 2 {
+		return "", recordErr(span, fmt.Errorf("incorrect number of arguments for decrby"))
+	}
+
+	decr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse increment argument: %w", err))
+	}
+
+	by, err := strconv.ParseInt(decr, 10, 64)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse decrement argument to int: %w", err))
+	}
+
+	// reverse sign
+	by *= -1
+
+	res, err := s.handleRedisIncrDecr(ctx, args, by)
+	if err != nil {
+		span.RecordError(err)
+		return "", err
+	}
+
+	return res, nil
+}
+
+func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by int64) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisIncrDecr") // nolint
 	defer span.End()
 
@@ -405,15 +466,10 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, inc
 
 		n, err := strconv.ParseInt(string(val), 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse value to int")
+			return nil, fmt.Errorf("failed to parse value to int: %w", err)
 		}
 
-		if incr {
-			n += 1
-		} else {
-			n -= 1
-		}
-
+		n += by
 		tx.Set(key, []byte(strconv.FormatInt(n, 10)))
 		return n, nil
 	})
