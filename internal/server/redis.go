@@ -92,15 +92,6 @@ func formatArrayOfBulkStrings(strs []string) string {
 	return b.String()
 }
 
-func formatSetOfBulkStrings(strs []string) string {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("~%d\r\n", len(strs)))
-	for _, str := range strs {
-		b.WriteString(formatBulkString(str))
-	}
-	return b.String()
-}
-
 func formatNil() string {
 	return "_\r\n"
 }
@@ -174,6 +165,7 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 	defer func() {
 		metrics.Queries.WithLabelValues(cmd.Name, status).Inc()
 		metrics.QueryDuration.WithLabelValues(cmd.Name, status).Observe(time.Since(start).Seconds())
+		s.log.Info("handled redis command", "cmd", cmd.Name, "num_args", len(cmd.Args), "status", status, "duration", time.Since(start).String())
 	}()
 
 	var res string
@@ -181,6 +173,8 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 	switch cmdLower {
 	case "ping":
 		res, err = s.handleRedisPing(ctx, cmd.Args)
+	case "select":
+		res, err = s.handleRedisSelect(ctx, cmd.Args)
 	case "get":
 		res, err = s.handleRedisGet(ctx, cmd.Args)
 	case "exists":
