@@ -398,6 +398,79 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 	return formatBoolAsInt(exists), nil
 }
 
+func (s *server) handleRedisIncr(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisIncr")
+	defer span.End()
+
+	res, err := s.handleRedisIncrDecr(ctx, args, true)
+	if err != nil {
+		span.RecordError(err)
+		return "", err
+	}
+
+	return res, nil
+}
+
+func (s *server) handleRedisDecr(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisDecr")
+	defer span.End()
+
+	res, err := s.handleRedisIncrDecr(ctx, args, false)
+	if err != nil {
+		span.RecordError(err)
+		return "", err
+	}
+
+	return res, nil
+}
+
+func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, incr bool) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisIncrDecr") // nolint
+	defer span.End()
+
+	k, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
+	}
+	key := fdb.Key(k)
+
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		val, err := tx.Get(fdb.Key(key)).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(val) == 0 {
+			// item does not yet exist
+			val = []byte("0")
+		}
+
+		n, err := strconv.ParseInt(string(val), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse value to int")
+		}
+
+		if incr {
+			n += 1
+		} else {
+			n -= 1
+		}
+
+		tx.Set(key, []byte(strconv.FormatInt(n, 10)))
+		return n, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to incr value: %w", err))
+	}
+
+	n, ok := res.(int64)
+	if !ok {
+		return "", recordErr(span, fmt.Errorf("failed to cast result of type %T to int64", res))
+	}
+
+	return formatInt(n), nil
+}
+
 // implement sets as serialized Roaring Bitmaps with interned keys we store in FDB
 
 func (s *server) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint64, error) {
@@ -533,7 +606,7 @@ func (s *server) handleRedisSetAdd(ctx context.Context, args []resp.Value) (stri
 	return formatInt(added), nil
 }
 
-func (s *server) redisSetAdd(ctx context.Context, setKey string, members []string) (int, error) {
+func (s *server) redisSetAdd(ctx context.Context, setKey string, members []string) (int64, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetAdd") // nolint
 	defer span.End()
 
@@ -541,49 +614,11 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		return 0, nil
 	}
 
-	added := 0
+	added := int64(0)
 	_, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get or create the set's bitmap
 		bitmapKey := "set/" + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
-func (s *server) handleRedisIncr(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisIncr")
-	defer span.End()
-
-	res, err := s.handleRedisIncrDecr(ctx, args, true)
-	if err != nil {
-		span.RecordError(err)
-		return "", err
-	}
-
-	return res, nil
-}
-
-func (s *server) handleRedisDecr(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisDecr")
-	defer span.End()
-
-	res, err := s.handleRedisIncrDecr(ctx, args, false)
-	if err != nil {
-		span.RecordError(err)
-		return "", err
-	}
-
-	return res, nil
-}
-
-func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, incr bool) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisIncrDecr") // nolint
-	defer span.End()
-
-	k, err := extractStringArg(args[0])
-	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
-	}
-	key := fdb.Key(k)
-
-	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		val, err := tx.Get(fdb.Key(key)).Get()
 		if err != nil {
 			return nil, err
 		}
@@ -655,7 +690,7 @@ func (s *server) handleRedisSetRemove(ctx context.Context, args []resp.Value) (s
 	return formatInt(removed), nil
 }
 
-func (s *server) redisSetRemove(ctx context.Context, setKey string, members []string) (int, error) {
+func (s *server) redisSetRemove(ctx context.Context, setKey string, members []string) (int64, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetRemove") // nolint
 	defer span.End()
 
@@ -663,7 +698,7 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 		return 0, nil
 	}
 
-	removed := 0
+	removed := int64(0)
 	_, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get the set's bitmap
 		bitmapKey := "set/" + setKey
@@ -797,7 +832,7 @@ func (s *server) handleRedisSetCard(ctx context.Context, args []resp.Value) (str
 	return formatInt(card), nil
 }
 
-func (s *server) redisSetCard(ctx context.Context, setKey string) (int, error) {
+func (s *server) redisSetCard(ctx context.Context, setKey string) (int64, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetCard") // nolint
 	defer span.End()
 
@@ -819,13 +854,13 @@ func (s *server) redisSetCard(ctx context.Context, setKey string) (int, error) {
 			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 		}
 
-		return int(bitmap.GetCardinality()), nil
+		return int64(bitmap.GetCardinality()), nil
 	})
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to get set cardinality: %w", err))
 	}
 
-	card, ok := res.(int)
+	card, ok := res.(int64)
 	if !ok {
 		return 0, recordErr(span, fmt.Errorf("invalid cardinality type: %T", res))
 	}
@@ -999,38 +1034,4 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 	}
 
 	return members, nil
-}
-
-func recordErr(span trace.Span, err error) error {
-	span.RecordError(err)
-	return err
-		if len(val) == 0 {
-			// item does not yet exist
-			val = []byte("0")
-		}
-
-		n, err := strconv.ParseInt(string(val), 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse value to int")
-		}
-
-		if incr {
-			n += 1
-		} else {
-			n -= 1
-		}
-
-		tx.Set(key, []byte(strconv.FormatInt(n, 10)))
-		return n, nil
-	})
-	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to incr value: %w", err))
-	}
-
-	n, ok := res.(int64)
-	if !ok {
-		return "", recordErr(span, fmt.Errorf("failed to cast result of type %T to int64", res))
-	}
-
-	return formatInt(n), nil
 }
