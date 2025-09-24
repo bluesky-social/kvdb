@@ -16,6 +16,7 @@ import (
 
 	roaring "github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/bluesky-social/go-util/pkg/concurrent"
 	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/attribute"
@@ -596,13 +597,14 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		return 0, nil
 	}
 
-	uids := make([]uint64, len(members))
-	for i, member := range members {
-		uid, err := s.getUID(ctx, member)
-		if err != nil {
-			return 0, recordErr(span, fmt.Errorf("failed to get UID for member %q: %w", member, err))
-		}
-		uids[i] = uid
+	// get or create UIDs for all members concurrently
+	r := concurrent.New[string, uint64]().Workers(50)
+
+	uids, err := r.Do(ctx, members, func(member string) (uint64, error) {
+		return s.getUID(ctx, member)
+	})
+	if err != nil {
+		return 0, recordErr(span, fmt.Errorf("failed to get UIDs for members: %w", err))
 	}
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
@@ -690,13 +692,14 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 		return 0, nil
 	}
 
-	uids := make([]uint64, len(members))
-	for i, member := range members {
-		uid, err := s.getUID(ctx, member)
-		if err != nil {
-			return 0, recordErr(span, fmt.Errorf("failed to get UID for member %q: %w", member, err))
-		}
-		uids[i] = uid
+	// get or create UIDs for all members concurrently
+	r := concurrent.New[string, uint64]().Workers(50)
+
+	uids, err := r.Do(ctx, members, func(member string) (uint64, error) {
+		return s.getUID(ctx, member)
+	})
+	if err != nil {
+		return 0, recordErr(span, fmt.Errorf("failed to get UIDs for members: %w", err))
 	}
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
@@ -933,13 +936,13 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 
 	// convert UIDs back to members
 	uids := bitmap.ToArray()
-	members := make([]string, len(uids))
-	for i, uid := range uids {
-		member, err := s.uidToMember(ctx, uid)
-		if err != nil {
-			return nil, recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
-		}
-		members[i] = member
+	r := concurrent.New[uint64, string]().Workers(50)
+
+	members, err := r.Do(ctx, uids, func(u uint64) (string, error) {
+		return s.uidToMember(ctx, u)
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to get members for UIDs: %w", err))
 	}
 
 	return members, nil
@@ -1028,14 +1031,13 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 
 	// convert UIDs back to members
 	uids := resultBitmap.ToArray()
-	members := make([]string, len(uids))
+	r := concurrent.New[uint64, string]().Workers(50)
 
-	for i, uid := range uids {
-		member, err := s.uidToMember(ctx, uid)
-		if err != nil {
-			return nil, recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
-		}
-		members[i] = member
+	members, err := r.Do(ctx, uids, func(u uint64) (string, error) {
+		return s.uidToMember(ctx, u)
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to get members for UIDs: %w", err))
 	}
 
 	return members, nil

@@ -1,6 +1,6 @@
 module github.com/bluesky-social/kvdb
 
-go 1.24.1
+go 1.24.5
 
 require (
 	github.com/prometheus/client_golang v1.23.2
@@ -13,11 +13,13 @@ require (
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.10.0
 	github.com/apple/foundationdb/bindings/go v0.0.0-20250221231555-5140696da2df
+	github.com/bluesky-social/go-util v0.0.0-20250911184242-2bd2bc840175
 )
 
 require (
 	github.com/bits-and-blooms/bitset v1.12.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
+	golang.org/x/sync v0.16.0 // indirect
 )
 
 require (
@@ -51,5 +53,5 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20250825161204-c5933d9347a5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250825161204-c5933d9347a5 // indirect
 	google.golang.org/grpc v1.75.0 // indirect
-	google.golang.org/protobuf v1.36.8 // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
 )
