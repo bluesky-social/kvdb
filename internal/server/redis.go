@@ -454,11 +454,15 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, inc
 
 // implement sets as serialized Roaring Bitmaps with interned keys we store in FDB
 
+const (
+	uidKey            = "uid_alloc" // key to store the last allocated UID
+	memberToUidPrefix = "member_to_uid/"
+	uidToMemberPrefix = "uid_to_member/"
+	setPrefix         = "set/"
+)
+
 func (s *server) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, error) {
 	span.AddEvent("allocateNewUID")
-	// use a special key to store the last allocated UID
-	const uidKey = "uid_alloc"
-
 	var newUID uint64
 	val, err := tx.Get(fdb.Key(uidKey)).Get()
 	if err != nil {
@@ -482,7 +486,7 @@ func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "getUID") // nolint
 	defer span.End()
 
-	var memberToUIDKey = "member_to_uid/" + member
+	var memberToUIDKey = memberToUidPrefix + member
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
@@ -498,7 +502,7 @@ func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 			uidStr := strconv.FormatUint(uid, 10)
 			tx.Set(fdb.Key(memberToUIDKey), []byte(uidStr))
 
-			var uidToMemberKey = "uid_to_member/" + uidStr
+			var uidToMemberKey = uidToMemberPrefix + uidStr
 			tx.Set(fdb.Key(uidToMemberKey), []byte(member))
 
 			return uid, nil
@@ -528,7 +532,7 @@ func (s *server) uidToMember(ctx context.Context, uid uint64) (string, error) {
 	defer span.End()
 
 	uidStr := strconv.FormatUint(uid, 10)
-	var uidToMemberKey = "uid_to_member/" + uidStr
+	var uidToMemberKey = uidToMemberPrefix + uidStr
 
 	var member string
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
@@ -603,7 +607,7 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get or create the set's bitmap
-		bitmapKey := "set/" + setKey
+		bitmapKey := setPrefix + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
 		if err != nil {
 			return nil, err
@@ -697,7 +701,7 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get the set's bitmap
-		bitmapKey := "set/" + setKey
+		bitmapKey := setPrefix + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
 		if err != nil {
 			return nil, err
@@ -779,7 +783,7 @@ func (s *server) redisSetIsMember(ctx context.Context, setKey string, member str
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the set's bitmap
-		bitmapKey := "set/" + setKey
+		bitmapKey := setPrefix + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
 		if err != nil {
 			return nil, err
@@ -836,7 +840,7 @@ func (s *server) redisSetCard(ctx context.Context, setKey string) (int64, error)
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the set's bitmap
-		bitmapKey := "set/" + setKey
+		bitmapKey := setPrefix + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
 		if err != nil {
 			return nil, err
@@ -894,7 +898,7 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the set's bitmap
-		bitmapKey := "set/" + setKey
+		bitmapKey := setPrefix + setKey
 		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
 		if err != nil {
 			return nil, err
@@ -978,7 +982,7 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 		var resultBitmap *roaring.Bitmap
 		for i, setKey := range setKeys {
 			// get the set's bitmap
-			bitmapKey := "set/" + setKey
+			bitmapKey := setPrefix + setKey
 			val, err := tx.Get(fdb.Key(bitmapKey)).Get()
 			if err != nil {
 				return nil, err
