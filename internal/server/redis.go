@@ -466,6 +466,9 @@ const (
 )
 
 func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
+	start := time.Now()
+
+	// Fetch the Metadata Key with the total length of the blob
 	val, err := tx.Get(fdb.Key(key)).Get()
 	if err != nil {
 		return nil, err
@@ -474,18 +477,19 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 		return nil, nil
 	}
 
-	// The value at the key without a suffix is the length of the object in bytes
+	// Unpack the length from a string
 	totalLength, err := strconv.Atoi(string(val))
 	if err != nil {
 		return nil, err
 	}
 
+	// Compute the number of chunks required to store the blob
 	rangeEnd := (totalLength / maxValBytes) + 1
 	if totalLength%maxValBytes == 0 {
 		rangeEnd = totalLength / maxValBytes
 	}
 
-	// Read the object in chunks
+	// Read the blob in chunks, only read up to the required number of chunks
 	rangeRes := tx.GetRange(fdb.KeyRange{
 		Begin: fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixStart)),
 		End:   fdb.Key(fmt.Sprintf("%s-%07d", key, rangeEnd+1)),
@@ -495,16 +499,24 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 		return nil, fmt.Errorf("failed to read existing object chunks: %w", err)
 	}
 
-	// Reassemble the object
+	// Reassemble the blob
 	buf := make([]byte, 0, totalLength)
+	bytesRead := 0
 	for _, kv := range kvs {
-		buf = append(buf, kv.Value...)
+		// Append the chunk to the buffer but don't exceed the total length
+		end := min(bytesRead+len(kv.Value), totalLength)
+		buf = append(buf, kv.Value[:end-bytesRead]...)
+		bytesRead = end
 	}
+
+	s.log.Info("read large object", "key", key, "total_length", totalLength, "num_chunks", rangeEnd, "actual_length", len(buf), "duration", time.Since(start).String())
 
 	return buf, nil
 }
 
 func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) error {
+	start := time.Now()
+
 	// Write the object in chunks of maxValBytes
 	totalLength := len(data)
 	rangeEnd := (totalLength / maxValBytes) + 1
@@ -526,6 +538,9 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
 		tx.Set(fdb.Key(chunkKey), data[start:end])
 	}
+
+	s.log.Info("wrote large object", "key", key, "total_length", totalLength, "num_chunks", rangeEnd, "duration", time.Since(start).String())
+
 	return nil
 }
 
