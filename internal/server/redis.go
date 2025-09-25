@@ -470,7 +470,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 	// Fetch the Metadata Key with the total length of the blob
 	val, err := tx.Get(fdb.Key(key)).Get()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read large object metadata key: %w", err)
 	}
 	if len(val) == 0 {
 		return nil, nil
@@ -479,7 +479,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 	// Unpack the length from a string
 	totalLength, err := strconv.Atoi(string(val))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse total length: %w", err)
 	}
 
 	// Compute the number of chunks required to store the blob
@@ -499,12 +499,12 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
 		val, err := tx.Get(fdb.Key(chunkKey)).Get()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read chunk %d: %w", i+1, err)
 		}
 		return val, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read chunks: %w", err)
 	}
 
 	// Concatenate the chunks up to the total length
@@ -572,7 +572,7 @@ func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get member to UID mapping: %w", err)
 		}
 
 		if len(val) == 0 {
@@ -616,7 +616,7 @@ func (s *server) uidToMember(ctx context.Context, uid uint64) (string, error) {
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		val, err := tx.Get(fdb.Key(uidToMemberKey)).Get()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get UID to member mapping: %w", err)
 		}
 		if len(val) == 0 {
 			return nil, fmt.Errorf("UID %d not found", uid)
