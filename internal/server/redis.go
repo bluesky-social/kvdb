@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -532,12 +531,20 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 
 	// Write the length of the object at the key without a suffix
 	tx.Set(fdb.Key(key), []byte(strconv.Itoa(totalLength)))
+
+	iters := make([]int, rangeEnd)
 	for i := 0; i < rangeEnd; i++ {
+		iters[i] = i
+	}
+
+	r := concurrent.New[int, any]().Workers(50)
+	r.Do(context.Background(), iters, func(i int) (any, error) {
 		start := i * maxValBytes
 		end := min((i+1)*maxValBytes, totalLength)
 		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
 		tx.Set(fdb.Key(chunkKey), data[start:end])
-	}
+		return nil, nil
+	})
 
 	s.log.Info("wrote large object", "key", key, "total_length", totalLength, "num_chunks", rangeEnd, "duration", time.Since(start).String())
 
@@ -666,10 +673,6 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		return 0, recordErr(span, fmt.Errorf("failed to get UIDs for members: %w", err))
 	}
 
-	// Large objects are stored as sequential chunks of 100k in fdb
-	// The range starts at key + "-0000001" and continues with incrementing suffixes
-	// The value at the key without a suffix is the length of the object in bytes
-
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// Get the Bitmap if it exists
 		bitmapKey := setPrefix + setKey
@@ -678,16 +681,11 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
 
-		added := int64(0)
-
 		// If the key doesn't exist, create a new bitmap
 		var bitmap *roaring.Bitmap
 		if len(buf) == 0 {
 			bitmap = roaring.New()
-			for _, uid := range uids {
-				bitmap.Add(uid)
-				added++
-			}
+			bitmap.AddMany(uids)
 		} else if len(buf) > 0 {
 			bitmap = roaring.New()
 			if err := bitmap.UnmarshalBinary(buf); err != nil {
@@ -695,12 +693,7 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 			}
 
 			// Add the new UIDs to the bitmap
-			for _, uid := range uids {
-				if !bitmap.Contains(uid) {
-					bitmap.Add(uid)
-					added++
-				}
-			}
+			bitmap.AddMany(uids)
 		}
 
 		// serialize and store the updated bitmap as a large object
@@ -712,7 +705,7 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 			return nil, fmt.Errorf("failed to write large object: %w", err)
 		}
 
-		return added, nil
+		return int64(len(uids)), nil
 	})
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
@@ -1005,8 +998,6 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 	if bitmap == nil || bitmap.IsEmpty() {
 		return []string{}, nil
 	}
-
-	slog.Info("bitmap members", "count", bitmap.GetCardinality())
 
 	// convert UIDs back to members
 	uids := bitmap.ToArray()
