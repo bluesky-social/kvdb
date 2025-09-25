@@ -488,25 +488,32 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 		rangeEnd = totalLength / maxValBytes
 	}
 
-	// Read the blob in chunks, only read up to the required number of chunks
-	rangeRes := tx.GetRange(fdb.KeyRange{
-		Begin: fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixStart)),
-		End:   fdb.Key(fmt.Sprintf("%s-%07d", key, rangeEnd+1)),
-	}, fdb.RangeOptions{})
-
-	// Reads sequentially and allocates memory for all chunks
-	kvs, err := rangeRes.GetSliceWithError()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read existing object chunks: %w", err)
+	// Read the blob chunks in parallel
+	iters := make([]int, rangeEnd)
+	for i := 0; i < rangeEnd; i++ {
+		iters[i] = i
 	}
 
-	// Reassemble the blob
+	r := concurrent.New[int, []byte]().Workers(50)
+	chunks, err := r.Do(context.Background(), iters, func(i int) ([]byte, error) {
+		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
+		val, err := tx.Get(fdb.Key(chunkKey)).Get()
+		if err != nil {
+			return nil, err
+		}
+		return val, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Concatenate the chunks up to the total length
 	buf := make([]byte, 0, totalLength)
 	bytesRead := 0
-	for _, kv := range kvs {
+	for _, chunk := range chunks {
 		// Append the chunk to the buffer but don't exceed the total length
-		end := min(bytesRead+len(kv.Value), totalLength)
-		buf = append(buf, kv.Value[:end-bytesRead]...)
+		end := min(bytesRead+len(chunk), totalLength)
+		buf = append(buf, chunk[:end-bytesRead]...)
 		bytesRead = end
 	}
 
