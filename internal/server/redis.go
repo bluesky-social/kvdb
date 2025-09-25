@@ -461,6 +461,8 @@ const (
 	uidToMemberPrefix = "uid_to_member/"
 	setPrefix         = "set/"
 	maxValBytes       = 100_000 // 100k
+	blobSuffixStart   = "-0000001"
+	blobSuffixEnd     = "-9999999"
 )
 
 func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
@@ -485,7 +487,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 
 	// Read the object in chunks
 	rangeRes := tx.GetRange(fdb.KeyRange{
-		Begin: fdb.Key(fmt.Sprintf("%s-0000001", key)),
+		Begin: fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixStart)),
 		End:   fdb.Key(fmt.Sprintf("%s-%07d", key, rangeEnd+1)),
 	}, fdb.RangeOptions{})
 	kvs, err := rangeRes.GetSliceWithError()
@@ -512,8 +514,8 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 
 	// First clear any existing chunks
 	tx.ClearRange(fdb.KeyRange{
-		Begin: fdb.Key(fmt.Sprintf("%s-0000001", key)),
-		End:   fdb.Key(fmt.Sprintf("%s-9999999", key)),
+		Begin: fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixStart)),
+		End:   fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixEnd)),
 	})
 
 	// Write the length of the object at the key without a suffix
