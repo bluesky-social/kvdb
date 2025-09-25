@@ -513,17 +513,14 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 	// First clear any existing chunks
 	tx.ClearRange(fdb.KeyRange{
 		Begin: fdb.Key(fmt.Sprintf("%s-0000001", key)),
-		End:   fdb.Key(fmt.Sprintf("%s-%07d", key, rangeEnd+1)),
+		End:   fdb.Key(fmt.Sprintf("%s-9999999", key)),
 	})
 
 	// Write the length of the object at the key without a suffix
 	tx.Set(fdb.Key(key), []byte(strconv.Itoa(totalLength)))
 	for i := 0; i < rangeEnd; i++ {
 		start := i * maxValBytes
-		end := (i + 1) * maxValBytes
-		if end > totalLength {
-			end = totalLength
-		}
+		end := min((i+1)*maxValBytes, totalLength)
 		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
 		tx.Set(fdb.Key(chunkKey), data[start:end])
 	}
