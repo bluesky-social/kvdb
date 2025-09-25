@@ -19,6 +19,7 @@ import (
 	"github.com/bluesky-social/go-util/pkg/concurrent"
 	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
+	"github.com/cespare/xxhash/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -456,57 +457,101 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, inc
 // implement sets as serialized Roaring Bitmaps with interned keys we store in FDB
 
 const (
-	uidKey            = "uid_alloc" // key to store the last allocated UID
 	memberToUidPrefix = "member_to_uid/"
 	uidToMemberPrefix = "uid_to_member/"
 	setPrefix         = "set/"
+	maxValBytes       = 100_000 // 100k
 )
 
-func (s *server) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, error) {
-	span.AddEvent("allocateNewUID")
-	var newUID uint64
-	val, err := tx.Get(fdb.Key(uidKey)).Get()
+func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
+	val, err := tx.Get(fdb.Key(key)).Get()
 	if err != nil {
-		return 0, recordErr(span, fmt.Errorf("failed to get last UID: %w", err))
+		return nil, err
 	}
 	if len(val) == 0 {
-		newUID = 1 // start from 1
-	} else {
-		lastUID, err := strconv.ParseUint(string(val), 10, 64)
-		if err != nil {
-			return 0, recordErr(span, fmt.Errorf("failed to parse last UID: %w", err))
-		}
-		newUID = lastUID + 1
+		return nil, nil
 	}
 
-	tx.Set(fdb.Key(uidKey), []byte(strconv.FormatUint(newUID, 10)))
-	return newUID, nil
+	// The value at the key without a suffix is the length of the object in bytes
+	totalLength, err := strconv.Atoi(string(val))
+	if err != nil {
+		return nil, err
+	}
+
+	rangeEnd := (totalLength / maxValBytes) + 1
+	if totalLength%maxValBytes == 0 {
+		rangeEnd = totalLength / maxValBytes
+	}
+
+	// Read the object in chunks
+	rangeRes := tx.GetRange(fdb.KeyRange{
+		Begin: fdb.Key(fmt.Sprintf("%s-0000001", key)),
+		End:   fdb.Key(fmt.Sprintf("%s-%07d", key, rangeEnd+1)),
+	}, fdb.RangeOptions{})
+	kvs, err := rangeRes.GetSliceWithError()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read existing object chunks: %w", err)
+	}
+
+	// Reassemble the object
+	buf := make([]byte, 0, totalLength)
+	for _, kv := range kvs {
+		buf = append(buf, kv.Value...)
+	}
+
+	return buf, nil
+}
+
+func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) error {
+	// Write the object in chunks of maxValBytes
+	totalLength := len(data)
+	rangeEnd := (totalLength / maxValBytes) + 1
+	if totalLength%maxValBytes == 0 {
+		rangeEnd = totalLength / maxValBytes
+	}
+
+	// First clear any existing chunks
+	tx.ClearRange(fdb.KeyRange{
+		Begin: fdb.Key(fmt.Sprintf("%s-0000001", key)),
+		End:   fdb.Key(fmt.Sprintf("%s-%07d", key, rangeEnd+1)),
+	})
+
+	// Write the length of the object at the key without a suffix
+	tx.Set(fdb.Key(key), []byte(strconv.Itoa(totalLength)))
+	for i := 0; i < rangeEnd; i++ {
+		start := i * maxValBytes
+		end := (i + 1) * maxValBytes
+		if end > totalLength {
+			end = totalLength
+		}
+		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
+		tx.Set(fdb.Key(chunkKey), data[start:end])
+	}
+	return nil
 }
 
 func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "getUID") // nolint
 	defer span.End()
-
 	var memberToUIDKey = memberToUidPrefix + member
+
+	memberHash := xxhash.Sum64([]byte(member))
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
 		if err != nil {
 			return nil, err
 		}
+
 		if len(val) == 0 {
 			// key does not exist yet, allocate a new UID
-			uid, err := s.allocateNewUID(span, tx)
-			if err != nil {
-				return nil, err
-			}
-			uidStr := strconv.FormatUint(uid, 10)
+			uidStr := strconv.FormatUint(memberHash, 10)
 			tx.Set(fdb.Key(memberToUIDKey), []byte(uidStr))
 
 			var uidToMemberKey = uidToMemberPrefix + uidStr
 			tx.Set(fdb.Key(uidToMemberKey), []byte(member))
 
-			return uid, nil
+			return memberHash, nil
 		}
 
 		// parse existing UID
@@ -607,38 +652,51 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		return 0, recordErr(span, fmt.Errorf("failed to get UIDs for members: %w", err))
 	}
 
-	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		// get or create the set's bitmap
-		bitmapKey := setPrefix + setKey
-		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
-		if err != nil {
-			return nil, err
-		}
+	// Large objects are stored as sequential chunks of 100k in fdb
+	// The range starts at key + "-0000001" and continues with incrementing suffixes
+	// The value at the key without a suffix is the length of the object in bytes
 
-		var bitmap *roaring.Bitmap
-		if len(val) == 0 {
-			bitmap = roaring.New()
-		} else {
-			bitmap = roaring.New()
-			if err := bitmap.UnmarshalBinary(val); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
-			}
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// Get the Bitmap if it exists
+		bitmapKey := setPrefix + setKey
+		buf, err := s.readLargeObject(tx, bitmapKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
 
 		added := int64(0)
-		for _, uid := range uids {
-			if !bitmap.Contains(uid) {
+
+		// If the key doesn't exist, create a new bitmap
+		var bitmap *roaring.Bitmap
+		if len(buf) == 0 {
+			bitmap = roaring.New()
+			for _, uid := range uids {
 				bitmap.Add(uid)
 				added++
 			}
+		} else if len(buf) > 0 {
+			bitmap = roaring.New()
+			if err := bitmap.UnmarshalBinary(buf); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+			}
+
+			// Add the new UIDs to the bitmap
+			for _, uid := range uids {
+				if !bitmap.Contains(uid) {
+					bitmap.Add(uid)
+					added++
+				}
+			}
 		}
 
-		// serialize and store the updated bitmap
+		// serialize and store the updated bitmap as a large object
 		data, err := bitmap.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
-		tx.Set(fdb.Key(bitmapKey), data)
+		if err := s.writeLargeObject(tx, bitmapKey, data); err != nil {
+			return nil, fmt.Errorf("failed to write large object: %w", err)
+		}
 
 		return added, nil
 	})
@@ -703,20 +761,20 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 	}
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		// get the set's bitmap
+		// Get the Bitmap if it exists
 		bitmapKey := setPrefix + setKey
-		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		blob, err := s.readLargeObject(tx, bitmapKey)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
 
-		if len(val) == 0 {
+		if len(blob) == 0 {
 			// set does not exist, nothing to remove
 			return nil, nil
 		}
 
 		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(val); err != nil {
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 		}
 
@@ -733,7 +791,9 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
-		tx.Set(fdb.Key(bitmapKey), data)
+		if err := s.writeLargeObject(tx, bitmapKey, data); err != nil {
+			return nil, fmt.Errorf("failed to write large object: %w", err)
+		}
 
 		return removed, nil
 	})
@@ -785,20 +845,20 @@ func (s *server) redisSetIsMember(ctx context.Context, setKey string, member str
 	}
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		// get the set's bitmap
+		// Get the Bitmap if it exists
 		bitmapKey := setPrefix + setKey
-		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		blob, err := s.readLargeObject(tx, bitmapKey)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
 
-		if len(val) == 0 {
+		if len(blob) == 0 {
 			// set does not exist, member cannot be present
 			return false, nil
 		}
 
 		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(val); err != nil {
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 		}
 
@@ -842,20 +902,20 @@ func (s *server) redisSetCard(ctx context.Context, setKey string) (int64, error)
 	defer span.End()
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		// get the set's bitmap
+		// Get the Bitmap's Meta Key if it exists
 		bitmapKey := setPrefix + setKey
-		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		blob, err := s.readLargeObject(tx, bitmapKey)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
 
-		if len(val) == 0 {
+		if len(blob) == 0 {
 			// set does not exist, cardinality is 0
-			return 0, nil
+			return int64(0), nil
 		}
 
 		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(val); err != nil {
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 		}
 
@@ -900,20 +960,20 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 	defer span.End()
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		// get the set's bitmap
+		// Get the Bitmap if it exists
 		bitmapKey := setPrefix + setKey
-		val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+		blob, err := s.readLargeObject(tx, bitmapKey)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
 
-		if len(val) == 0 {
-			// set does not exist
+		if len(blob) == 0 {
+			// set does not exist, no members
 			return nil, nil
 		}
 
 		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(val); err != nil {
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 		}
 
@@ -984,21 +1044,21 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		var resultBitmap *roaring.Bitmap
 		for i, setKey := range setKeys {
-			// get the set's bitmap
+			// Get the Bitmap's Meta Key if it exists
 			bitmapKey := setPrefix + setKey
-			val, err := tx.Get(fdb.Key(bitmapKey)).Get()
+			blob, err := s.readLargeObject(tx, bitmapKey)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to read large object: %w", err)
 			}
 
-			var bitmap *roaring.Bitmap
-			if len(val) == 0 {
-				// set does not exist, intersection is empty
-				return roaring.New(), nil
+			if len(blob) == 0 {
+				// set does not exist, no members
+				return nil, nil
 			}
 
-			bitmap = roaring.New()
-			if err := bitmap.UnmarshalBinary(val); err != nil {
+			// Read the large object if it exists
+			bitmap := roaring.New()
+			if err := bitmap.UnmarshalBinary(blob); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 			}
 

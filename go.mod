@@ -14,10 +14,12 @@ require (
 	github.com/RoaringBitmap/roaring/v2 v2.10.0
 	github.com/apple/foundationdb/bindings/go v0.0.0-20250221231555-5140696da2df
 	github.com/bluesky-social/go-util v0.0.0-20250911184242-2bd2bc840175
+	github.com/redis/go-redis/v9 v9.14.0
 )
 
 require (
 	github.com/bits-and-blooms/bitset v1.12.0 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 )
@@ -32,7 +34,7 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
