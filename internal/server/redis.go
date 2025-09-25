@@ -570,27 +570,43 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 func (s *server) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, error) {
 	span.AddEvent("allocateNewUID")
 
-	// Pick a random uint32 as the sequence we will be using for this member
-	sequenceNum := rand.Uint32()
-	sequenceKey := fmt.Sprintf("%s%d", uidSequencePrefix, sequenceNum)
+	// sequenceNum is the random uint32 sequence we are using for this allocation
+	var sequenceNum uint32
+	var sequenceKey string
 
 	// assignedUID is the uint32 within the sequence we will assign
 	var assignedUID uint32
 
-	val, err := tx.Get(fdb.Key(sequenceKey)).Get()
-	if err != nil {
-		return 0, recordErr(span, fmt.Errorf("failed to get last UID: %w", err))
-	}
-	if len(val) == 0 {
-		assignedUID = 1
-	} else {
-		lastUID, err := strconv.ParseUint(string(val), 10, 32)
-		if err != nil {
-			return 0, recordErr(span, fmt.Errorf("failed to parse last UID: %w", err))
-		}
+	// Try up to 5 times to find a sequence that is not exhausted
+	for range 5 {
+		// Pick a random uint32 as the sequence we will be using for this member
+		sequenceNum = rand.Uint32()
+		sequenceKey = fmt.Sprintf("%s%d", uidSequencePrefix, sequenceNum)
 
-		// Could potentially overflow here, but extremely unlikely
-		assignedUID = uint32(lastUID + 1)
+		val, err := tx.Get(fdb.Key(sequenceKey)).Get()
+		if err != nil {
+			return 0, recordErr(span, fmt.Errorf("failed to get last UID: %w", err))
+		}
+		if len(val) == 0 {
+			assignedUID = 1
+		} else {
+			lastUID, err := strconv.ParseUint(string(val), 10, 32)
+			if err != nil {
+				return 0, recordErr(span, fmt.Errorf("failed to parse last UID: %w", err))
+			}
+
+			// If we have exhausted this sequence, pick a new random sequence
+			if lastUID >= 0xFFFFFFFF {
+				continue
+			}
+
+			assignedUID = uint32(lastUID) + 1
+		}
+	}
+
+	// If we failed to find a sequence after 5 tries, return an error
+	if assignedUID == 0 {
+		return 0, recordErr(span, fmt.Errorf("failed to allocate new UID after 5 attempts"))
 	}
 
 	// Assemble the 64-bit UID from the sequence and assigned UID
