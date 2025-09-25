@@ -494,7 +494,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 		iters[i] = i
 	}
 
-	r := concurrent.New[int, []byte]().Workers(50)
+	r := concurrent.New[int, []byte]()
 	chunks, err := r.Do(context.Background(), iters, func(i int) ([]byte, error) {
 		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
 		val, err := tx.Get(fdb.Key(chunkKey)).Get()
@@ -546,7 +546,7 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 		iters[i] = i
 	}
 
-	r := concurrent.New[int, any]().Workers(50)
+	r := concurrent.New[int, any]()
 
 	// Write all chunks concurrently since ordering does not matter
 	_, _ = r.Do(context.Background(), iters, func(i int) (any, error) {
@@ -675,7 +675,7 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 	}
 
 	// get or create UIDs for all members concurrently
-	r := concurrent.New[string, uint64]().Workers(50)
+	r := concurrent.New[string, uint64]()
 
 	uids, err := r.Do(ctx, members, func(member string) (uint64, error) {
 		return s.getUID(ctx, member)
@@ -687,25 +687,24 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// Get the Bitmap if it exists
 		bitmapKey := setPrefix + setKey
-		buf, err := s.readLargeObject(tx, bitmapKey)
+		blob, err := s.readLargeObject(tx, bitmapKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
 
 		// If the key doesn't exist, create a new bitmap
 		var bitmap *roaring.Bitmap
-		if len(buf) == 0 {
+		if len(blob) == 0 {
 			bitmap = roaring.New()
-			bitmap.AddMany(uids)
-		} else if len(buf) > 0 {
+		} else if len(blob) > 0 {
 			bitmap = roaring.New()
-			if err := bitmap.UnmarshalBinary(buf); err != nil {
+			if err := bitmap.UnmarshalBinary(blob); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 			}
-
-			// Add the new UIDs to the bitmap
-			bitmap.AddMany(uids)
 		}
+
+		// Add the new UIDs to the bitmap
+		bitmap.AddMany(uids)
 
 		// serialize and store the updated bitmap as a large object
 		data, err := bitmap.MarshalBinary()
@@ -769,7 +768,7 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 	}
 
 	// get or create UIDs for all members concurrently
-	r := concurrent.New[string, uint64]().Workers(50)
+	r := concurrent.New[string, uint64]()
 
 	uids, err := r.Do(ctx, members, func(member string) (uint64, error) {
 		return s.getUID(ctx, member)
@@ -869,29 +868,28 @@ func (s *server) redisSetIsMember(ctx context.Context, setKey string, member str
 		if err != nil {
 			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
-
-		if len(blob) == 0 {
-			// set does not exist, member cannot be present
-			return false, nil
-		}
-
-		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(blob); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
-		}
-
-		return bitmap.Contains(uid), nil
+		return blob, nil
 	})
 	if err != nil {
 		return false, recordErr(span, fmt.Errorf("failed to check membership: %w", err))
 	}
 
-	isMember, ok := res.(bool)
+	blob, ok := res.([]byte)
 	if !ok {
-		return false, recordErr(span, fmt.Errorf("invalid isMember type: %T", res))
+		return false, recordErr(span, fmt.Errorf("invalid blob type: %T", res))
 	}
 
-	return isMember, nil
+	if len(blob) == 0 {
+		// set does not exist, member cannot be present
+		return false, nil
+	}
+
+	bitmap := roaring.New()
+	if err := bitmap.UnmarshalBinary(blob); err != nil {
+		return false, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+	}
+
+	return bitmap.Contains(uid), nil
 }
 
 func (s *server) handleRedisSetCard(ctx context.Context, args []resp.Value) (string, error) {
@@ -926,30 +924,29 @@ func (s *server) redisSetCard(ctx context.Context, setKey string) (int64, error)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
-
-		if len(blob) == 0 {
-			// set does not exist, cardinality is 0
-			return int64(0), nil
-		}
-
-		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(blob); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
-		}
-
-		// uint64 to int64 conversion, beware of overflow though incredibly unlikely
-		return int64(bitmap.GetCardinality()), nil
+		return blob, nil
 	})
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to get set cardinality: %w", err))
 	}
 
-	card, ok := res.(int64)
+	blob, ok := res.([]byte)
 	if !ok {
-		return 0, recordErr(span, fmt.Errorf("invalid cardinality type: %T", res))
+		return 0, recordErr(span, fmt.Errorf("invalid blob type: %T", res))
 	}
 
-	return card, nil
+	if len(blob) == 0 {
+		// set does not exist, cardinality is 0
+		return int64(0), nil
+	}
+
+	bitmap := roaring.New()
+	if err := bitmap.UnmarshalBinary(blob); err != nil {
+		return int64(0), fmt.Errorf("failed to unmarshal bitmap: %w", err)
+	}
+
+	// uint64 to int64 conversion, beware of overflow though incredibly unlikely
+	return int64(bitmap.GetCardinality()), nil
 }
 
 func (s *server) handleRedisSetMembers(ctx context.Context, args []resp.Value) (string, error) {
@@ -984,26 +981,25 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
-
-		if len(blob) == 0 {
-			// set does not exist, no members
-			return nil, nil
-		}
-
-		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(blob); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
-		}
-
-		return bitmap, nil
+		return blob, nil
 	})
 	if err != nil {
 		return nil, recordErr(span, fmt.Errorf("failed to get set members: %w", err))
 	}
 
-	bitmap, ok := res.(*roaring.Bitmap)
+	blob, ok := res.([]byte)
 	if !ok {
-		return nil, recordErr(span, fmt.Errorf("invalid bitmap type: %T", res))
+		return nil, recordErr(span, fmt.Errorf("invalid blob type: %T", res))
+	}
+
+	if len(blob) == 0 {
+		// set does not exist, no members
+		return []string{}, nil
+	}
+
+	bitmap := roaring.New()
+	if err := bitmap.UnmarshalBinary(blob); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
 	}
 
 	if bitmap == nil || bitmap.IsEmpty() {
@@ -1012,7 +1008,7 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 
 	// convert UIDs back to members
 	uids := bitmap.ToArray()
-	r := concurrent.New[uint64, string]().Workers(50)
+	r := concurrent.New[uint64, string]()
 
 	members, err := r.Do(ctx, uids, func(u uint64) (string, error) {
 		return s.uidToMember(ctx, u)
@@ -1058,47 +1054,54 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 	}
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		var resultBitmap *roaring.Bitmap
-		for i, setKey := range setKeys {
-			// Get the Bitmap's Meta Key if it exists
+		r := concurrent.New[string, []byte]()
+		blobs, err := r.Do(ctx, setKeys, func(setKey string) ([]byte, error) {
 			bitmapKey := setPrefix + setKey
 			blob, err := s.readLargeObject(tx, bitmapKey)
 			if err != nil {
-				return nil, fmt.Errorf("failed to read large object: %w", err)
+				return nil, fmt.Errorf("failed to read large object for set %q: %w", setKey, err)
 			}
-
-			if len(blob) == 0 {
-				// set does not exist, no members
-				return nil, nil
-			}
-
-			// Read the large object if it exists
-			bitmap := roaring.New()
-			if err := bitmap.UnmarshalBinary(blob); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
-			}
-
-			if i == 0 {
-				// first set, initialize resultBitmap
-				resultBitmap = bitmap
-			} else {
-				resultBitmap.And(bitmap)
-			}
-
-			// if at any point the intersection is empty, we can stop early
-			if resultBitmap.IsEmpty() {
-				break
-			}
+			return blob, nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to read bitmaps for sets: %w", err)
 		}
-		return resultBitmap, nil
+		return blobs, nil
 	})
 	if err != nil {
 		return nil, recordErr(span, fmt.Errorf("failed to compute set intersection: %w", err))
 	}
 
-	resultBitmap, ok := res.(*roaring.Bitmap)
+	blobs, ok := res.([][]byte)
 	if !ok {
-		return nil, recordErr(span, fmt.Errorf("invalid bitmap type: %T", res))
+		return nil, recordErr(span, fmt.Errorf("invalid blobs type: %T", res))
+	}
+
+	// Unmarshal and intersect all bitmaps
+	r := concurrent.New[[]byte, *roaring.Bitmap]()
+	bitmaps, err := r.Do(ctx, blobs, func(blob []byte) (*roaring.Bitmap, error) {
+		if len(blob) == 0 {
+			// empty bitmap
+			return roaring.New(), nil
+		}
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+		}
+		return bitmap, nil
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to unmarshal bitmaps: %w", err))
+	}
+
+	// Intersect all bitmaps
+	resultBitmap := bitmaps[0]
+	for _, bitmap := range bitmaps[1:] {
+		if bitmap == nil || bitmap.IsEmpty() {
+			// intersection with empty set is empty
+			return []string{}, nil
+		}
+		resultBitmap.And(bitmap)
 	}
 
 	if resultBitmap == nil || resultBitmap.IsEmpty() {
@@ -1107,9 +1110,8 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 
 	// convert UIDs back to members
 	uids := resultBitmap.ToArray()
-	r := concurrent.New[uint64, string]().Workers(50)
-
-	members, err := r.Do(ctx, uids, func(u uint64) (string, error) {
+	r2 := concurrent.New[uint64, string]()
+	members, err := r2.Do(ctx, uids, func(u uint64) (string, error) {
 		return s.uidToMember(ctx, u)
 	})
 	if err != nil {
