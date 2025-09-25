@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"os"
 	"strconv"
@@ -18,7 +19,6 @@ import (
 	"github.com/bluesky-social/go-util/pkg/concurrent"
 	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
-	"github.com/cespare/xxhash/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -456,6 +456,7 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, inc
 // implement sets as serialized Roaring Bitmaps with interned keys we store in FDB
 
 const (
+	uidSequencePrefix = "uid_sequence/"
 	memberToUidPrefix = "member_to_uid/"
 	uidToMemberPrefix = "uid_to_member/"
 	setPrefix         = "set/"
@@ -562,28 +563,73 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 	return nil
 }
 
+// allocate a new unique 64-bit UID
+// The upper 32 bits are a random sequence number
+// The lower 32 bits are a sequential number within that sequence
+// This allows for up to 4 billion unique IDs per sequence and very low contention when allocating new IDs
+func (s *server) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, error) {
+	span.AddEvent("allocateNewUID")
+
+	// Pick a random uint32 as the sequence we will be using for this member
+	sequenceNum := rand.Uint32()
+	sequenceKey := fmt.Sprintf("%s%d", uidSequencePrefix, sequenceNum)
+
+	// assignedUID is the uint32 within the sequence we will assign
+	var assignedUID uint32
+
+	val, err := tx.Get(fdb.Key(sequenceKey)).Get()
+	if err != nil {
+		return 0, recordErr(span, fmt.Errorf("failed to get last UID: %w", err))
+	}
+	if len(val) == 0 {
+		assignedUID = 1
+	} else {
+		lastUID, err := strconv.ParseUint(string(val), 10, 32)
+		if err != nil {
+			return 0, recordErr(span, fmt.Errorf("failed to parse last UID: %w", err))
+		}
+
+		// Could potentially overflow here, but extremely unlikely
+		assignedUID = uint32(lastUID + 1)
+	}
+
+	// Assemble the 64-bit UID from the sequence and assigned UID
+	newUID := (uint64(sequenceNum) << 32) | uint64(assignedUID)
+
+	// Store the assigned UID back to the sequence key for the next allocation
+	tx.Set(fdb.Key(sequenceKey), []byte(strconv.FormatUint(uint64(assignedUID), 10)))
+
+	// Return the full 64-bit UID
+	return newUID, nil
+}
+
 func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "getUID") // nolint
 	defer span.End()
 	var memberToUIDKey = memberToUidPrefix + member
 
-	memberHash := xxhash.Sum64([]byte(member))
-
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// Check if we've already assigned a UID to this member
 		val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get member to UID mapping: %w", err)
 		}
 
 		if len(val) == 0 {
-			// key does not exist yet, allocate a new UID
-			uidStr := strconv.FormatUint(memberHash, 10)
-			tx.Set(fdb.Key(memberToUIDKey), []byte(uidStr))
+			// Allocate a new UID for this member string
+			uid, err := s.allocateNewUID(span, tx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to allocate new UID: %w", err)
+			}
 
+			uidStr := strconv.FormatUint(uid, 10)
 			var uidToMemberKey = uidToMemberPrefix + uidStr
+
+			// Store the bi-directional mapping
+			tx.Set(fdb.Key(memberToUIDKey), []byte(uidStr))
 			tx.Set(fdb.Key(uidToMemberKey), []byte(member))
 
-			return memberHash, nil
+			return uid, nil
 		}
 
 		// parse existing UID
