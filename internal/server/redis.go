@@ -493,6 +493,8 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 		Begin: fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixStart)),
 		End:   fdb.Key(fmt.Sprintf("%s-%07d", key, rangeEnd+1)),
 	}, fdb.RangeOptions{})
+
+	// Reads sequentially and allocates memory for all chunks
 	kvs, err := rangeRes.GetSliceWithError()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read existing object chunks: %w", err)
@@ -538,7 +540,9 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 	}
 
 	r := concurrent.New[int, any]().Workers(50)
-	r.Do(context.Background(), iters, func(i int) (any, error) {
+
+	// Write all chunks concurrently since ordering does not matter
+	_, _ = r.Do(context.Background(), iters, func(i int) (any, error) {
 		start := i * maxValBytes
 		end := min((i+1)*maxValBytes, totalLength)
 		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
