@@ -2,6 +2,8 @@
 
 An implementation of a subset of the redis command set backed persistently by FoundationDB.
 
+Note that the name KVDB is temporary.
+
 ## Local Development
 
 Ensure you have [go](https://go.dev), [just](https://github.com/casey/just), and the [foundation clients](https://github.com/apple/foundationdb/releases/tag/7.3.63) installed (you must use fdb version 7.3.63).
