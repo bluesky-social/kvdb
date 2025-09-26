@@ -461,8 +461,22 @@ func FormatSimpleString(str string) string {
 	return fmt.Sprintf("+%s\r\n", str)
 }
 
+func SimpleStringValue(str string) Value {
+	return Value{
+		Type:  TypeSimpleString,
+		Value: str,
+	}
+}
+
 func FormatBulkString(str string) string {
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(str), str)
+}
+
+func BulkStringValue(str string) Value {
+	return Value{
+		Type:  TypeBulkString,
+		Value: str,
+	}
 }
 
 func FormatArrayOfBulkStrings(strs []string) string {
@@ -490,6 +504,20 @@ func FormatInt(n int64) string {
 	return fmt.Sprintf(":%d\r\n", n)
 }
 
+func IntegerValue(i int) Value {
+	return Value{
+		Type:  TypeInteger,
+		Value: i,
+	}
+}
+
 func FormatError(err error) string {
 	return fmt.Sprintf("-ERR %s\r\n", err)
+}
+
+func ErrorValue(str string) Value {
+	return Value{
+		Type:  TypeSimpleError,
+		Value: str,
+	}
 }

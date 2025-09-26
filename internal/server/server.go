@@ -194,6 +194,14 @@ func (s *server) serveRedis(wg *sync.WaitGroup, done <-chan any, args *Args) {
 			Conn: conn,
 		})
 
-		go sess.Serve(context.Background())
+		go func() {
+			defer func() {
+				if err := conn.Close(); err != nil {
+					s.log.Warn("failed to close redis client connection", "err", err)
+				}
+			}()
+
+			sess.Serve(context.Background())
+		}()
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
-	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -45,13 +44,13 @@ type session struct {
 	tracer trace.Tracer
 
 	fdb    fdb.Database
-	conn   net.Conn
+	conn   io.ReadWriter
 	reader *bufio.Reader
 }
 
 type NewSessionArgs struct {
 	FDB  fdb.Database
-	Conn net.Conn
+	Conn io.ReadWriter
 }
 
 func NewSession(args *NewSessionArgs) *session {
@@ -82,12 +81,6 @@ func isValidKey(key string) bool {
 }
 
 func (s *session) Serve(ctx context.Context) {
-	defer func() {
-		if err := s.conn.Close(); err != nil {
-			s.log.Warn("failed to close client connection", "err", err)
-		}
-	}()
-
 	ctx, span := s.tracer.Start(ctx, "handleRedisConn")
 	defer span.End()
 
@@ -252,17 +245,21 @@ func (s *session) handleRedisPing(ctx context.Context, args []resp.Value) (strin
 	ctx, span := s.tracer.Start(ctx, "handleRedisPing") // nolint
 	defer span.End()
 
-	const response = "+PONG\r\n"
-	if len(args) == 0 {
-		return response, nil
+	if len(args) > 1 {
+		return "", recordErr(span, fmt.Errorf("incorrect number of arguments for ping"))
 	}
 
-	// echo back the first argument
-	if arg, err := extractStringArg(args[0]); err == nil {
-		return resp.FormatBulkString(arg), nil
+	res := "+PONG\r\n"
+	if len(args) > 0 {
+		// echo back the first argument
+		arg, err := extractStringArg(args[0])
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse argument: %w", err))
+		}
+		res = resp.FormatSimpleString(arg)
 	}
 
-	return response, nil
+	return res, nil
 }
 
 func (s *session) handleRedisGet(ctx context.Context, args []resp.Value) (string, error) {
