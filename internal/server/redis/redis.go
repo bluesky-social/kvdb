@@ -81,43 +81,6 @@ func isValidKey(key string) bool {
 	return true
 }
 
-func formatSimpleString(str string) string {
-	return fmt.Sprintf("+%s\r\n", str)
-}
-
-func formatBulkString(str string) string {
-	return fmt.Sprintf("$%d\r\n%s\r\n", len(str), str)
-}
-
-func formatArrayOfBulkStrings(strs []string) string {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("*%d\r\n", len(strs)))
-	for _, str := range strs {
-		b.WriteString(formatBulkString(str))
-	}
-	return b.String()
-}
-
-func formatNil() string {
-	return "_\r\n"
-}
-
-func formatBoolAsInt(val bool) string {
-	n := int64(0)
-	if val {
-		n = 1
-	}
-	return formatInt(n)
-}
-
-func formatInt(n int64) string {
-	return fmt.Sprintf(":%d\r\n", n)
-}
-
-func formatError(err error) string {
-	return fmt.Sprintf("-ERR %s\r\n", err)
-}
-
 func (s *session) Serve(ctx context.Context) {
 	defer func() {
 		if err := s.conn.Close(); err != nil {
@@ -134,12 +97,11 @@ func (s *session) Serve(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			s.write(formatError(fmt.Errorf("failed to parse command: %w", err)))
+			s.write(resp.FormatError(fmt.Errorf("failed to parse command: %w", err)))
 			continue
 		}
 
-		resp := s.handleRedisCommand(ctx, cmd)
-		s.write(resp)
+		s.write(s.handleRedisCommand(ctx, cmd))
 	}
 }
 
@@ -156,7 +118,7 @@ func (s *session) parseRedisCommand(ctx context.Context, reader *bufio.Reader) (
 }
 
 func (s *session) handleRedisCommand(ctx context.Context, cmd *resp.Command) string {
-	ctx, span := s.tracer.Start(ctx, "handleRedisCommand") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleRedisCommand")
 	defer span.End()
 
 	cmdLower := strings.ToLower(cmd.Name)
@@ -215,11 +177,11 @@ func (s *session) handleRedisCommand(ctx context.Context, cmd *resp.Command) str
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
-		return formatError(err)
+		return resp.FormatError(err)
 	}
 	if err != nil {
 		span.RecordError(err)
-		return formatError(err)
+		return resp.FormatError(err)
 	}
 
 	status = metrics.StatusOK
@@ -290,17 +252,17 @@ func (s *session) handleRedisPing(ctx context.Context, args []resp.Value) (strin
 	ctx, span := s.tracer.Start(ctx, "handleRedisPing") // nolint
 	defer span.End()
 
-	const resp = "+PONG\r\n"
+	const response = "+PONG\r\n"
 	if len(args) == 0 {
-		return resp, nil
+		return response, nil
 	}
 
 	// echo back the first argument
 	if arg, err := extractStringArg(args[0]); err == nil {
-		return formatBulkString(arg), nil
+		return resp.FormatBulkString(arg), nil
 	}
 
-	return resp, nil
+	return response, nil
 }
 
 func (s *session) handleRedisGet(ctx context.Context, args []resp.Value) (string, error) {
@@ -314,10 +276,10 @@ func (s *session) handleRedisGet(ctx context.Context, args []resp.Value) (string
 
 	if len(val) == 0 {
 		// not found
-		return formatNil(), nil
+		return resp.FormatNil(), nil
 	}
 
-	return formatBulkString(string(val)), nil
+	return resp.FormatBulkString(string(val)), nil
 }
 
 func (s *session) handleRedisExists(ctx context.Context, args []resp.Value) (string, error) {
@@ -329,7 +291,7 @@ func (s *session) handleRedisExists(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, err)
 	}
 
-	return formatBoolAsInt(len(val) > 0), nil
+	return resp.FormatBoolAsInt(len(val) > 0), nil
 }
 
 func (s *session) redisGet(args []resp.Value) ([]byte, error) {
@@ -379,7 +341,7 @@ func (s *session) handleRedisSet(ctx context.Context, args []resp.Value) (string
 		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
 	}
 
-	return formatSimpleString("OK"), nil
+	return resp.FormatSimpleString("OK"), nil
 }
 
 func (s *session) handleRedisDelete(ctx context.Context, args []resp.Value) (string, error) {
@@ -403,7 +365,7 @@ func (s *session) handleRedisDelete(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, fmt.Errorf("failed to cast exists of type %T to a bool", res))
 	}
 
-	return formatBoolAsInt(exists), nil
+	return resp.FormatBoolAsInt(exists), nil
 }
 
 func (s *session) handleRedisIncr(ctx context.Context, args []resp.Value) (string, error) {
@@ -529,7 +491,7 @@ func (s *session) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by
 		return "", recordErr(span, fmt.Errorf("failed to cast result of type %T to int64", res))
 	}
 
-	return formatInt(n), nil
+	return resp.FormatInt(n), nil
 }
 
 // Large Objects are implemented by chunking the object into pieces of maxValBytes
@@ -831,7 +793,7 @@ func (s *session) handleRedisSetAdd(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
 	}
 
-	return formatInt(added), nil
+	return resp.FormatInt(added), nil
 }
 
 func (s *session) redisSetAdd(ctx context.Context, setKey string, members []string) (int64, error) {
@@ -928,7 +890,7 @@ func (s *session) handleRedisSetRemove(ctx context.Context, args []resp.Value) (
 		return "", recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
 	}
 
-	return formatInt(removed), nil
+	return resp.FormatInt(removed), nil
 }
 
 func (s *session) redisSetRemove(ctx context.Context, setKey string, members []string) (int64, error) {
@@ -1031,7 +993,7 @@ func (s *session) handleRedisSetIsMember(ctx context.Context, args []resp.Value)
 		return "", recordErr(span, fmt.Errorf("failed to check membership: %w", err))
 	}
 
-	return formatBoolAsInt(isMember), nil
+	return resp.FormatBoolAsInt(isMember), nil
 }
 
 func (s *session) redisSetIsMember(ctx context.Context, setKey string, member string) (bool, error) {
@@ -1093,7 +1055,7 @@ func (s *session) handleRedisSetCard(ctx context.Context, args []resp.Value) (st
 		return "", recordErr(span, fmt.Errorf("failed to get set cardinality: %w", err))
 	}
 
-	return formatInt(card), nil
+	return resp.FormatInt(card), nil
 }
 
 func (s *session) redisSetCard(ctx context.Context, setKey string) (int64, error) {
@@ -1150,7 +1112,7 @@ func (s *session) handleRedisSetMembers(ctx context.Context, args []resp.Value) 
 		return "", recordErr(span, fmt.Errorf("failed to get set members: %w", err))
 	}
 
-	return formatArrayOfBulkStrings(members), nil
+	return resp.FormatArrayOfBulkStrings(members), nil
 }
 
 func (s *session) redisSetMembers(ctx context.Context, setKey string) ([]string, error) {
@@ -1225,7 +1187,7 @@ func (s *session) handleRedisSetInter(ctx context.Context, args []resp.Value) (s
 		return "", recordErr(span, fmt.Errorf("failed to compute set intersection: %w", err))
 	}
 
-	return formatArrayOfBulkStrings(members), nil
+	return resp.FormatArrayOfBulkStrings(members), nil
 }
 
 func (s *session) redisSetInter(ctx context.Context, setKeys []string) ([]string, error) {
@@ -1326,7 +1288,7 @@ func (s *session) handleRedisSetUnion(ctx context.Context, args []resp.Value) (s
 		return "", recordErr(span, fmt.Errorf("failed to compute set union: %w", err))
 	}
 
-	return formatArrayOfBulkStrings(members), nil
+	return resp.FormatArrayOfBulkStrings(members), nil
 }
 
 func (s *session) redisSetUnion(ctx context.Context, setKeys []string) ([]string, error) {
@@ -1427,7 +1389,7 @@ func (s *session) handleRedisSetDiff(ctx context.Context, args []resp.Value) (st
 		return "", recordErr(span, fmt.Errorf("failed to compute set difference: %w", err))
 	}
 
-	return formatArrayOfBulkStrings(members), nil
+	return resp.FormatArrayOfBulkStrings(members), nil
 }
 
 func (s *session) redisSetDiff(ctx context.Context, setKeys []string) ([]string, error) {

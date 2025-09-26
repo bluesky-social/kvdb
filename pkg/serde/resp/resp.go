@@ -456,3 +456,40 @@ func parsePush(reader *bufio.Reader) (*Value, error) {
 
 	return &Value{Type: TypePush, Value: elems}, nil
 }
+
+func FormatSimpleString(str string) string {
+	return fmt.Sprintf("+%s\r\n", str)
+}
+
+func FormatBulkString(str string) string {
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(str), str)
+}
+
+func FormatArrayOfBulkStrings(strs []string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("*%d\r\n", len(strs)))
+	for _, str := range strs {
+		b.WriteString(FormatBulkString(str))
+	}
+	return b.String()
+}
+
+func FormatNil() string {
+	return "_\r\n"
+}
+
+func FormatBoolAsInt(val bool) string {
+	n := int64(0)
+	if val {
+		n = 1
+	}
+	return FormatInt(n)
+}
+
+func FormatInt(n int64) string {
+	return fmt.Sprintf(":%d\r\n", n)
+}
+
+func FormatError(err error) string {
+	return fmt.Sprintf("-ERR %s\r\n", err)
+}
