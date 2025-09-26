@@ -33,12 +33,12 @@ func TestPing(t *testing.T) {
 	ctx := t.Context()
 	sess := testSession(t)
 
-	res := sess.handleRedisCommand(ctx, &resp.Command{
+	res := sess.handleCommand(ctx, &resp.Command{
 		Name: "PING",
 	})
 	require.Equal(resp.FormatSimpleString("PONG"), res)
 
-	res = sess.handleRedisCommand(ctx, &resp.Command{
+	res = sess.handleCommand(ctx, &resp.Command{
 		Name: "PING",
 		Args: []resp.Value{
 			resp.SimpleStringValue("hello"),
@@ -46,7 +46,7 @@ func TestPing(t *testing.T) {
 	})
 	require.Equal(resp.FormatSimpleString("hello"), res)
 
-	res = sess.handleRedisCommand(ctx, &resp.Command{
+	res = sess.handleCommand(ctx, &resp.Command{
 		Name: "PING",
 		Args: []resp.Value{
 			resp.SimpleStringValue("hello"),

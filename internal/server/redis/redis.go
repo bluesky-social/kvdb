@@ -81,11 +81,11 @@ func isValidKey(key string) bool {
 }
 
 func (s *session) Serve(ctx context.Context) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisConn")
+	ctx, span := s.tracer.Start(ctx, "Serve")
 	defer span.End()
 
 	for {
-		cmd, err := s.parseRedisCommand(ctx, s.reader)
+		cmd, err := s.parseCommand(ctx, s.reader)
 		if errors.Is(err, io.EOF) {
 			return
 		}
@@ -94,12 +94,12 @@ func (s *session) Serve(ctx context.Context) {
 			continue
 		}
 
-		s.write(s.handleRedisCommand(ctx, cmd))
+		s.write(s.handleCommand(ctx, cmd))
 	}
 }
 
-func (s *session) parseRedisCommand(ctx context.Context, reader *bufio.Reader) (*resp.Command, error) {
-	ctx, span := s.tracer.Start(ctx, "parseRedisCommand") // nolint
+func (s *session) parseCommand(ctx context.Context, reader *bufio.Reader) (*resp.Command, error) {
+	ctx, span := s.tracer.Start(ctx, "parseCommand") // nolint
 	defer span.End()
 
 	cmd, err := resp.ParseCommand(reader)
@@ -110,8 +110,8 @@ func (s *session) parseRedisCommand(ctx context.Context, reader *bufio.Reader) (
 	return cmd, nil
 }
 
-func (s *session) handleRedisCommand(ctx context.Context, cmd *resp.Command) string {
-	ctx, span := s.tracer.Start(ctx, "handleRedisCommand")
+func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
+	ctx, span := s.tracer.Start(ctx, "handleCommand")
 	defer span.End()
 
 	cmdLower := strings.ToLower(cmd.Name)
@@ -132,39 +132,39 @@ func (s *session) handleRedisCommand(ctx context.Context, cmd *resp.Command) str
 	var err error
 	switch cmdLower {
 	case "ping":
-		res, err = s.handleRedisPing(ctx, cmd.Args)
+		res, err = s.handlePing(ctx, cmd.Args)
 	case "get":
-		res, err = s.handleRedisGet(ctx, cmd.Args)
+		res, err = s.handleGet(ctx, cmd.Args)
 	case "exists":
-		res, err = s.handleRedisExists(ctx, cmd.Args)
+		res, err = s.handleExists(ctx, cmd.Args)
 	case "set":
-		res, err = s.handleRedisSet(ctx, cmd.Args)
+		res, err = s.handleSet(ctx, cmd.Args)
 	case "del":
-		res, err = s.handleRedisDelete(ctx, cmd.Args)
+		res, err = s.handleDelete(ctx, cmd.Args)
 	case "sadd":
-		res, err = s.handleRedisSetAdd(ctx, cmd.Args)
+		res, err = s.handleSetAdd(ctx, cmd.Args)
 	case "srem":
-		res, err = s.handleRedisSetRemove(ctx, cmd.Args)
+		res, err = s.handleSetRemove(ctx, cmd.Args)
 	case "sismember":
-		res, err = s.handleRedisSetIsMember(ctx, cmd.Args)
+		res, err = s.handleSetIsMember(ctx, cmd.Args)
 	case "scard":
-		res, err = s.handleRedisSetCard(ctx, cmd.Args)
+		res, err = s.handleSetCard(ctx, cmd.Args)
 	case "smembers":
-		res, err = s.handleRedisSetMembers(ctx, cmd.Args)
+		res, err = s.handleSetMembers(ctx, cmd.Args)
 	case "sinter":
-		res, err = s.handleRedisSetInter(ctx, cmd.Args)
+		res, err = s.handleSetInter(ctx, cmd.Args)
 	case "sunion":
-		res, err = s.handleRedisSetUnion(ctx, cmd.Args)
+		res, err = s.handleSetUnion(ctx, cmd.Args)
 	case "sdiff":
-		res, err = s.handleRedisSetDiff(ctx, cmd.Args)
+		res, err = s.handleSetDiff(ctx, cmd.Args)
 	case "incr":
-		res, err = s.handleRedisIncr(ctx, cmd.Args)
+		res, err = s.handleIncr(ctx, cmd.Args)
 	case "incrby":
-		res, err = s.handleRedisIncrBy(ctx, cmd.Args)
+		res, err = s.handleIncrBy(ctx, cmd.Args)
 	case "decr":
-		res, err = s.handleRedisDecr(ctx, cmd.Args)
+		res, err = s.handleDecr(ctx, cmd.Args)
 	case "decrby":
-		res, err = s.handleRedisDecrBy(ctx, cmd.Args)
+		res, err = s.handleDecrBy(ctx, cmd.Args)
 	case "quit":
 		res = "+OK\r\n"
 	default:
@@ -241,8 +241,8 @@ func recordErr(span trace.Span, err error) error {
 	return err
 }
 
-func (s *session) handleRedisPing(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisPing") // nolint
+func (s *session) handlePing(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handlePing") // nolint
 	defer span.End()
 
 	if len(args) > 1 {
@@ -262,8 +262,8 @@ func (s *session) handleRedisPing(ctx context.Context, args []resp.Value) (strin
 	return res, nil
 }
 
-func (s *session) handleRedisGet(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisGet") // nolint
+func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleGet") // nolint
 	defer span.End()
 
 	val, err := s.redisGet(args)
@@ -279,8 +279,8 @@ func (s *session) handleRedisGet(ctx context.Context, args []resp.Value) (string
 	return resp.FormatBulkString(string(val)), nil
 }
 
-func (s *session) handleRedisExists(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisExists") // nolint
+func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleExists") // nolint
 	defer span.End()
 
 	val, err := s.redisGet(args)
@@ -316,8 +316,8 @@ func (s *session) redisGet(args []resp.Value) ([]byte, error) {
 	return val, nil
 }
 
-func (s *session) handleRedisSet(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSet") // nolint
+func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSet") // nolint
 	defer span.End()
 
 	key, err := extractKeyArg(args[0])
@@ -341,8 +341,8 @@ func (s *session) handleRedisSet(ctx context.Context, args []resp.Value) (string
 	return resp.FormatSimpleString("OK"), nil
 }
 
-func (s *session) handleRedisDelete(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisDelete") // nolint
+func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleDelete") // nolint
 	defer span.End()
 
 	key, err := extractKeyArg(args[0])
@@ -365,11 +365,11 @@ func (s *session) handleRedisDelete(ctx context.Context, args []resp.Value) (str
 	return resp.FormatBoolAsInt(exists), nil
 }
 
-func (s *session) handleRedisIncr(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisIncr")
+func (s *session) handleIncr(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleIncr")
 	defer span.End()
 
-	res, err := s.handleRedisIncrDecr(ctx, args, 1)
+	res, err := s.handleIncrDecr(ctx, args, 1)
 	if err != nil {
 		span.RecordError(err)
 		return "", err
@@ -378,8 +378,8 @@ func (s *session) handleRedisIncr(ctx context.Context, args []resp.Value) (strin
 	return res, nil
 }
 
-func (s *session) handleRedisIncrBy(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisIncrBy")
+func (s *session) handleIncrBy(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleIncrBy")
 	defer span.End()
 
 	if len(args) != 2 {
@@ -396,7 +396,7 @@ func (s *session) handleRedisIncrBy(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, fmt.Errorf("failed to parse increment argument to int: %w", err))
 	}
 
-	res, err := s.handleRedisIncrDecr(ctx, args, by)
+	res, err := s.handleIncrDecr(ctx, args, by)
 	if err != nil {
 		span.RecordError(err)
 		return "", err
@@ -405,11 +405,11 @@ func (s *session) handleRedisIncrBy(ctx context.Context, args []resp.Value) (str
 	return res, nil
 }
 
-func (s *session) handleRedisDecr(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisDecr")
+func (s *session) handleDecr(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleDecr")
 	defer span.End()
 
-	res, err := s.handleRedisIncrDecr(ctx, args, -1)
+	res, err := s.handleIncrDecr(ctx, args, -1)
 	if err != nil {
 		span.RecordError(err)
 		return "", err
@@ -418,8 +418,8 @@ func (s *session) handleRedisDecr(ctx context.Context, args []resp.Value) (strin
 	return res, nil
 }
 
-func (s *session) handleRedisDecrBy(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisDecrBy")
+func (s *session) handleDecrBy(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleDecrBy")
 	defer span.End()
 
 	if len(args) != 2 {
@@ -439,7 +439,7 @@ func (s *session) handleRedisDecrBy(ctx context.Context, args []resp.Value) (str
 	// reverse sign
 	by *= -1
 
-	res, err := s.handleRedisIncrDecr(ctx, args, by)
+	res, err := s.handleIncrDecr(ctx, args, by)
 	if err != nil {
 		span.RecordError(err)
 		return "", err
@@ -448,8 +448,8 @@ func (s *session) handleRedisDecrBy(ctx context.Context, args []resp.Value) (str
 	return res, nil
 }
 
-func (s *session) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by int64) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisIncrDecr") // nolint
+func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, by int64) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleIncrDecr") // nolint
 	defer span.End()
 
 	k, err := extractKeyArg(args[0])
@@ -763,8 +763,8 @@ func (s *session) uidToMember(ctx context.Context, uid uint64) (string, error) {
 	return member, nil
 }
 
-func (s *session) handleRedisSetAdd(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSetAdd") // nolint
+func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetAdd") // nolint
 	defer span.End()
 
 	if len(args) < 2 {
@@ -860,8 +860,8 @@ func (s *session) redisSetAdd(ctx context.Context, setKey string, members []stri
 	return int64(len(uids)), nil
 }
 
-func (s *session) handleRedisSetRemove(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSetRemove") // nolint
+func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetRemove") // nolint
 	defer span.End()
 
 	if len(args) < 2 {
@@ -967,8 +967,8 @@ func (s *session) redisSetRemove(ctx context.Context, setKey string, members []s
 	return removed, nil
 }
 
-func (s *session) handleRedisSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSetIsMember") // nolint
+func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetIsMember") // nolint
 	defer span.End()
 
 	if len(args) != 2 {
@@ -1034,8 +1034,8 @@ func (s *session) redisSetIsMember(ctx context.Context, setKey string, member st
 	return bitmap.Contains(uid), nil
 }
 
-func (s *session) handleRedisSetCard(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSetCard") // nolint
+func (s *session) handleSetCard(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetCard") // nolint
 	defer span.End()
 
 	if len(args) != 1 {
@@ -1091,8 +1091,8 @@ func (s *session) redisSetCard(ctx context.Context, setKey string) (int64, error
 	return int64(bitmap.GetCardinality()), nil
 }
 
-func (s *session) handleRedisSetMembers(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSetMembers") // nolint
+func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetMembers") // nolint
 	defer span.End()
 
 	if len(args) != 1 {
@@ -1162,8 +1162,8 @@ func (s *session) redisSetMembers(ctx context.Context, setKey string) ([]string,
 	return members, nil
 }
 
-func (s *session) handleRedisSetInter(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSetInter") // nolint
+func (s *session) handleSetInter(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetInter") // nolint
 	defer span.End()
 
 	if len(args) < 1 {
@@ -1263,8 +1263,8 @@ func (s *session) redisSetInter(ctx context.Context, setKeys []string) ([]string
 	return members, nil
 }
 
-func (s *session) handleRedisSetUnion(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSetUnion") // nolint
+func (s *session) handleSetUnion(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetUnion") // nolint
 	defer span.End()
 
 	if len(args) < 1 {
@@ -1364,8 +1364,8 @@ func (s *session) redisSetUnion(ctx context.Context, setKeys []string) ([]string
 	return members, nil
 }
 
-func (s *session) handleRedisSetDiff(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleRedisSetDiff") // nolint
+func (s *session) handleSetDiff(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetDiff") // nolint
 	defer span.End()
 
 	if len(args) < 1 {
