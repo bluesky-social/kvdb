@@ -658,6 +658,19 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) (
 	return int64(totalLength), nil
 }
 
+func (s *server) deleteLargeObject(tx fdb.Transaction, key string) error {
+	// Clear all chunks with the blob suffix range
+	tx.ClearRange(fdb.KeyRange{
+		Begin: fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixStart)),
+		End:   fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixEnd)),
+	})
+
+	// Clear the main key
+	tx.Clear(fdb.Key(key))
+
+	return nil
+}
+
 // allocate a new unique 64-bit UID
 // The upper 32 bits are a random sequence number
 // The lower 32 bits are a sequential number within that sequence
@@ -983,6 +996,14 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 				bitmap.Remove(uid)
 				removed++
 			}
+		}
+
+		// If the set is now empty, delete the large object
+		if bitmap.IsEmpty() {
+			if err := s.deleteLargeObject(tx, bitmapKey); err != nil {
+				return int64(0), fmt.Errorf("failed to delete large object: %w", err)
+			}
+			return removed, nil
 		}
 
 		// serialize and store the updated bitmap
