@@ -23,6 +23,19 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const (
+	uidSequencePrefix  = "uid_sequence/"
+	memberToUidPrefix  = "member_to_uid/"
+	uidToMemberPrefix  = "uid_to_member/"
+	setPrefix          = "set/"
+	maxValBytes        = 100_000    // 100k
+	blobIndexSeparator = "\x21\xFB" // ⇻ used as a separator between the key and the chunk index, should be stripped from input keys
+	blobSuffixStart    = "0000001"
+	blobSuffixEnd      = "9999999"
+)
+
+var ErrInvalidKey = errors.New("invalid key: contains illegal characters")
+
 func (s *server) serveRedis(wg *sync.WaitGroup, done <-chan any, args *Args) {
 	defer wg.Done()
 
@@ -317,6 +330,10 @@ func (s *server) redisGet(args []resp.Value) ([]byte, error) {
 		return nil, fmt.Errorf("failed to parse argument: %w", err)
 	}
 
+	if strings.Contains(arg, blobIndexSeparator) {
+		return nil, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey)
+	}
+
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		return tx.Get(fdb.Key(arg)).Get()
 	})
@@ -339,6 +356,10 @@ func (s *server) handleRedisSet(ctx context.Context, args []resp.Value) (string,
 	key, err := extractStringArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
+	}
+
+	if strings.Contains(key, blobIndexSeparator) {
+		return "", recordErr(span, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey))
 	}
 
 	value, err := extractStringArg(args[1])
@@ -364,6 +385,10 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 	key, err := extractStringArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
+	}
+
+	if strings.Contains(key, blobIndexSeparator) {
+		return "", recordErr(span, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey))
 	}
 
 	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
@@ -478,6 +503,11 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by 
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
+
+	if strings.Contains(k, blobIndexSeparator) {
+		return "", recordErr(span, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey))
+	}
+
 	key := fdb.Key(k)
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
@@ -512,20 +542,12 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by 
 	return formatInt(n), nil
 }
 
-// implement sets as serialized Roaring Bitmaps with interned keys we store in FDB
-
-const (
-	uidSequencePrefix = "uid_sequence/"
-	memberToUidPrefix = "member_to_uid/"
-	uidToMemberPrefix = "uid_to_member/"
-	setPrefix         = "set/"
-	maxValBytes       = 100_000 // 100k
-	blobSuffixStart   = "-0000001"
-	blobSuffixEnd     = "-9999999"
-)
-
 func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
 	start := time.Now()
+
+	if strings.Contains(key, blobIndexSeparator) {
+		return nil, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey)
+	}
 
 	// Fetch the Metadata Key with the total length of the blob
 	val, err := tx.Get(fdb.Key(key)).Get()
@@ -556,7 +578,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 
 	r := concurrent.New[int, []byte]()
 	chunks, err := r.Do(context.Background(), iters, func(i int) ([]byte, error) {
-		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
+		chunkKey := fmt.Sprintf("%s%s%07d", key, blobIndexSeparator, i+1)
 		val, err := tx.Get(fdb.Key(chunkKey)).Get()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunk %d: %w", i+1, err)
@@ -585,6 +607,10 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) error {
 	start := time.Now()
 
+	if strings.Contains(key, blobIndexSeparator) {
+		return fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey)
+	}
+
 	// Write the object in chunks of maxValBytes
 	totalLength := len(data)
 	rangeEnd := (totalLength / maxValBytes) + 1
@@ -594,8 +620,8 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 
 	// First clear any existing chunks
 	tx.ClearRange(fdb.KeyRange{
-		Begin: fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixStart)),
-		End:   fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixEnd)),
+		Begin: fdb.Key(fmt.Sprintf("%s%s%s", key, blobIndexSeparator, blobSuffixStart)),
+		End:   fdb.Key(fmt.Sprintf("%s%s%s", key, blobIndexSeparator, blobSuffixEnd)),
 	})
 
 	// Write the length of the object at the key without a suffix
@@ -612,7 +638,7 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 	_, _ = r.Do(context.Background(), iters, func(i int) (any, error) {
 		start := i * maxValBytes
 		end := min((i+1)*maxValBytes, totalLength)
-		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
+		chunkKey := fmt.Sprintf("%s%s%07d", key, blobIndexSeparator, i+1)
 		tx.Set(fdb.Key(chunkKey), data[start:end])
 		return nil, nil
 	})
