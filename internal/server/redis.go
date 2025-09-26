@@ -413,22 +413,16 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
 
-	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		val, err := tx.Get(fdb.Key(key)).Get()
-		if err != nil {
-			return nil, err
-		}
-
-		tx.Clear(fdb.Key(key))
-		return len(val) > 0, nil
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		return s.deleteLargeObject(tx, key)
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to delete value: %w", err))
 	}
 
-	exists, ok := existsAny.(bool)
+	exists, ok := res.(bool)
 	if !ok {
-		return "", recordErr(span, fmt.Errorf("failed to cast exists of type %T to a bool", existsAny))
+		return "", recordErr(span, fmt.Errorf("failed to cast exists of type %T to a bool", res))
 	}
 
 	return formatBoolAsInt(exists), nil
@@ -658,7 +652,13 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) (
 	return int64(totalLength), nil
 }
 
-func (s *server) deleteLargeObject(tx fdb.Transaction, key string) error {
+func (s *server) deleteLargeObject(tx fdb.Transaction, key string) (bool, error) {
+	// Check if the object exists
+	val, err := tx.Get(fdb.Key(key)).Get()
+	if err != nil {
+		return false, fmt.Errorf("failed to get large object: %w", err)
+	}
+
 	// Clear all chunks with the blob suffix range
 	tx.ClearRange(fdb.KeyRange{
 		Begin: fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixStart)),
@@ -668,7 +668,7 @@ func (s *server) deleteLargeObject(tx fdb.Transaction, key string) error {
 	// Clear the main key
 	tx.Clear(fdb.Key(key))
 
-	return nil
+	return len(val) > 0, nil
 }
 
 // allocate a new unique 64-bit UID
@@ -1000,7 +1000,7 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 
 		// If the set is now empty, delete the large object
 		if bitmap.IsEmpty() {
-			if err := s.deleteLargeObject(tx, bitmapKey); err != nil {
+			if _, err := s.deleteLargeObject(tx, bitmapKey); err != nil {
 				return int64(0), fmt.Errorf("failed to delete large object: %w", err)
 			}
 			return removed, nil
