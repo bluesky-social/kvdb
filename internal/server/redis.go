@@ -678,49 +678,69 @@ func (s *server) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, er
 	return newUID, nil
 }
 
-func (s *server) getUID(ctx context.Context, member string) (uint64, error) {
+// getUID returns the UID for the given member string, creating a new one if it does not exist
+// If peek is true, it will only look up the UID without creating a new one
+// If peeking and the member does not exist, it returns 0 without an error
+// UIDs start at 1, so 0 is never a valid UID
+func (s *server) getUID(ctx context.Context, member string, peek bool) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "getUID") // nolint
 	defer span.End()
 	var memberToUIDKey = memberToUidPrefix + member
 
-	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		// Check if we've already assigned a UID to this member
-		val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get member to UID mapping: %w", err)
-		}
+	var res any
+	var err error
 
-		if len(val) == 0 {
-			// Allocate a new UID for this member string
-			uid, err := s.allocateNewUID(span, tx)
+	if peek {
+		// just look up the UID without creating a new one
+		res, err = s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+			val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
 			if err != nil {
-				return nil, fmt.Errorf("failed to allocate new UID: %w", err)
+				return nil, fmt.Errorf("failed to get member to UID mapping: %w", err)
+			}
+			if len(val) == 0 {
+				return uint64(0), nil
+			}
+			return val, nil
+		})
+	} else {
+		res, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+			// Check if we've already assigned a UID to this member
+			val, err := tx.Get(fdb.Key(memberToUIDKey)).Get()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get member to UID mapping: %w", err)
 			}
 
-			uidStr := strconv.FormatUint(uid, 10)
-			var uidToMemberKey = uidToMemberPrefix + uidStr
+			if len(val) == 0 {
+				// Allocate a new UID for this member string
+				uid, err := s.allocateNewUID(span, tx)
+				if err != nil {
+					return nil, fmt.Errorf("failed to allocate new UID: %w", err)
+				}
 
-			// Store the bi-directional mapping
-			tx.Set(fdb.Key(memberToUIDKey), []byte(uidStr))
-			tx.Set(fdb.Key(uidToMemberKey), []byte(member))
+				uidStr := strconv.FormatUint(uid, 10)
+				var uidToMemberKey = uidToMemberPrefix + uidStr
 
-			return uid, nil
-		}
+				// Store the bi-directional mapping
+				tx.Set(fdb.Key(memberToUIDKey), []byte(uidStr))
+				tx.Set(fdb.Key(uidToMemberKey), []byte(member))
 
-		// parse existing UID
-		uid, err := strconv.ParseUint(string(val), 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse existing UID: %w", err)
-		}
-		return uid, nil
-	})
+				return []byte(uidStr), nil
+			}
+			return val, nil
+		})
+	}
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to get or create UID: %w", err))
 	}
 
-	uid, ok := res.(uint64)
+	uidStr, ok := res.([]byte)
 	if !ok {
 		return 0, recordErr(span, fmt.Errorf("invalid UID type: %T", res))
+	}
+
+	uid, err := strconv.ParseUint(string(uidStr), 10, 64)
+	if err != nil {
+		return 0, recordErr(span, fmt.Errorf("failed to parse UID: %w", err))
 	}
 
 	return uid, nil
@@ -799,7 +819,7 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 	r := concurrent.New[string, uint64]()
 
 	uids, err := r.Do(ctx, members, func(member string) (uint64, error) {
-		return s.getUID(ctx, member)
+		return s.getUID(ctx, member, false)
 	})
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to get UIDs for members: %w", err))
@@ -892,7 +912,8 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 	r := concurrent.New[string, uint64]()
 
 	uids, err := r.Do(ctx, members, func(member string) (uint64, error) {
-		return s.getUID(ctx, member)
+		// Peek since we don't want to create new UIDs when removing
+		return s.getUID(ctx, member, true)
 	})
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to get UIDs for members: %w", err))
@@ -977,7 +998,8 @@ func (s *server) redisSetIsMember(ctx context.Context, setKey string, member str
 	ctx, span := s.tracer.Start(ctx, "redisSetIsMember") // nolint
 	defer span.End()
 
-	uid, err := s.getUID(ctx, member)
+	// Peek since we don't want to create new UIDs when checking membership
+	uid, err := s.getUID(ctx, member, true)
 	if err != nil {
 		return false, recordErr(span, fmt.Errorf("failed to get UID for member: %w", err))
 	}
