@@ -698,7 +698,7 @@ func (s *server) getUID(ctx context.Context, member string, peek bool) (uint64, 
 				return nil, fmt.Errorf("failed to get member to UID mapping: %w", err)
 			}
 			if len(val) == 0 {
-				return uint64(0), nil
+				return []byte("0"), nil
 			}
 			return val, nil
 		})
