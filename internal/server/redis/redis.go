@@ -131,6 +131,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 	var res string
 	var err error
 	switch cmdLower {
+	case "quit":
+		res = resp.FormatSimpleString("OK")
 	case "ping":
 		res, err = s.handlePing(ctx, cmd.Args)
 	case "get":
@@ -141,6 +143,14 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSet(ctx, cmd.Args)
 	case "del":
 		res, err = s.handleDelete(ctx, cmd.Args)
+	case "incr":
+		res, err = s.handleIncr(ctx, cmd.Args)
+	case "incrby":
+		res, err = s.handleIncrBy(ctx, cmd.Args)
+	case "decr":
+		res, err = s.handleDecr(ctx, cmd.Args)
+	case "decrby":
+		res, err = s.handleDecrBy(ctx, cmd.Args)
 	case "sadd":
 		res, err = s.handleSetAdd(ctx, cmd.Args)
 	case "srem":
@@ -157,16 +167,6 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetUnion(ctx, cmd.Args)
 	case "sdiff":
 		res, err = s.handleSetDiff(ctx, cmd.Args)
-	case "incr":
-		res, err = s.handleIncr(ctx, cmd.Args)
-	case "incrby":
-		res, err = s.handleIncrBy(ctx, cmd.Args)
-	case "decr":
-		res, err = s.handleDecr(ctx, cmd.Args)
-	case "decrby":
-		res, err = s.handleDecrBy(ctx, cmd.Args)
-	case "quit":
-		res = "+OK\r\n"
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
