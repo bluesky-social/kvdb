@@ -531,17 +531,16 @@ func TestSets(t *testing.T) {
 	})
 	requireArraysEqual(t, []string{val1, val3, val4}, res)
 
-	// @TODO: fix set deletion
-	// // delete the whole set and check that it's gone
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "DEL",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// require.Equal(resp.FormatBoolAsInt(true), res)
+	// delete the whole set and check that it's gone
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "DEL",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	require.Equal(resp.FormatBoolAsInt(true), res)
 
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SMEMBERS",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// requireArraysEqual(t, []string{}, res)
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireArraysEqual(t, []string{}, res)
 }

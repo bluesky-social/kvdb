@@ -26,7 +26,6 @@ const (
 	uidSequencePrefix  = "uid_sequence/"
 	memberToUidPrefix  = "member_to_uid/"
 	uidToMemberPrefix  = "uid_to_member/"
-	setPrefix          = "set/"
 	maxValBytes        = 100_000  // 100k
 	blobIndexSeparator = '\u21FB' // ⇻ used as a separator between the key and the chunk index
 	blobSuffixStart    = "0000001"
@@ -819,8 +818,7 @@ func (s *session) redisSetAdd(ctx context.Context, setKey string, members []stri
 	start := time.Now()
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// Get the Bitmap if it exists
-		bitmapKey := setPrefix + setKey
-		blob, err := s.readLargeObject(tx, bitmapKey)
+		blob, err := s.readLargeObject(tx, setKey)
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to read large object: %w", err)
 		}
@@ -844,7 +842,7 @@ func (s *session) redisSetAdd(ctx context.Context, setKey string, members []stri
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
-		bytesWritten, err := s.writeLargeObject(tx, bitmapKey, data)
+		bytesWritten, err := s.writeLargeObject(tx, setKey, data)
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to write large object: %w", err)
 		}
@@ -916,8 +914,7 @@ func (s *session) redisSetRemove(ctx context.Context, setKey string, members []s
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// Get the Bitmap if it exists
-		bitmapKey := setPrefix + setKey
-		blob, err := s.readLargeObject(tx, bitmapKey)
+		blob, err := s.readLargeObject(tx, setKey)
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to read large object: %w", err)
 		}
@@ -942,7 +939,7 @@ func (s *session) redisSetRemove(ctx context.Context, setKey string, members []s
 
 		// If the set is now empty, delete the large object
 		if bitmap.IsEmpty() {
-			if _, err := s.deleteLargeObject(tx, bitmapKey); err != nil {
+			if _, err := s.deleteLargeObject(tx, setKey); err != nil {
 				return int64(0), fmt.Errorf("failed to delete large object: %w", err)
 			}
 			return removed, nil
@@ -953,7 +950,7 @@ func (s *session) redisSetRemove(ctx context.Context, setKey string, members []s
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
-		_, err = s.writeLargeObject(tx, bitmapKey, data)
+		_, err = s.writeLargeObject(tx, setKey, data)
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to write large object: %w", err)
 		}
@@ -1010,8 +1007,7 @@ func (s *session) redisSetIsMember(ctx context.Context, setKey string, member st
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// Get the Bitmap if it exists
-		bitmapKey := setPrefix + setKey
-		blob, err := s.readLargeObject(tx, bitmapKey)
+		blob, err := s.readLargeObject(tx, setKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
@@ -1066,8 +1062,7 @@ func (s *session) redisSetCard(ctx context.Context, setKey string) (int64, error
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// Get the Bitmap's Meta Key if it exists
-		bitmapKey := setPrefix + setKey
-		blob, err := s.readLargeObject(tx, bitmapKey)
+		blob, err := s.readLargeObject(tx, setKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
@@ -1123,8 +1118,7 @@ func (s *session) redisSetMembers(ctx context.Context, setKey string) ([]string,
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// Get the Bitmap if it exists
-		bitmapKey := setPrefix + setKey
-		blob, err := s.readLargeObject(tx, bitmapKey)
+		blob, err := s.readLargeObject(tx, setKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read large object: %w", err)
 		}
@@ -1203,8 +1197,7 @@ func (s *session) redisSetInter(ctx context.Context, setKeys []string) ([]string
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		r := concurrent.New[string, []byte]()
 		blobs, err := r.Do(ctx, setKeys, func(setKey string) ([]byte, error) {
-			bitmapKey := setPrefix + setKey
-			blob, err := s.readLargeObject(tx, bitmapKey)
+			blob, err := s.readLargeObject(tx, setKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read large object for set %q: %w", setKey, err)
 			}
@@ -1304,8 +1297,7 @@ func (s *session) redisSetUnion(ctx context.Context, setKeys []string) ([]string
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		r := concurrent.New[string, []byte]()
 		blobs, err := r.Do(ctx, setKeys, func(setKey string) ([]byte, error) {
-			bitmapKey := setPrefix + setKey
-			blob, err := s.readLargeObject(tx, bitmapKey)
+			blob, err := s.readLargeObject(tx, setKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read large object for set %q: %w", setKey, err)
 			}
@@ -1405,8 +1397,7 @@ func (s *session) redisSetDiff(ctx context.Context, setKeys []string) ([]string,
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		r := concurrent.New[string, []byte]()
 		blobs, err := r.Do(ctx, setKeys, func(setKey string) ([]byte, error) {
-			bitmapKey := setPrefix + setKey
-			blob, err := s.readLargeObject(tx, bitmapKey)
+			blob, err := s.readLargeObject(tx, setKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read large object for set %q: %w", setKey, err)
 			}
