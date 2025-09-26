@@ -55,8 +55,8 @@ type NewSessionArgs struct {
 
 func NewSession(args *NewSessionArgs) *session {
 	return &session{
-		log:    slog.Default().With(slog.String("group", "server")),
-		tracer: otel.Tracer("kvdb"),
+		log:    slog.Default().With(slog.String("group", "redis")),
+		tracer: otel.Tracer("redis"),
 		fdb:    args.FDB,
 		conn:   args.Conn,
 		reader: bufio.NewReader(args.Conn),
