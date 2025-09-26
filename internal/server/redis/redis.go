@@ -302,7 +302,7 @@ func (s *session) redisGet(args []resp.Value) ([]byte, error) {
 	}
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		return tx.Get(fdb.Key(key)).Get()
+		return s.readLargeObject(tx, key)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get value: %w", err)
@@ -335,8 +335,7 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		tx.Set(fdb.Key(key), []byte(value))
-		return nil, nil
+		return s.writeLargeObject(tx, key, []byte(value))
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
@@ -456,15 +455,13 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, by int6
 	ctx, span := s.tracer.Start(ctx, "handleIncrDecr") // nolint
 	defer span.End()
 
-	k, err := extractKeyArg(args[0])
+	key, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
 
-	key := fdb.Key(k)
-
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		val, err := tx.Get(fdb.Key(key)).Get()
+		val, err := s.readLargeObject(tx, key)
 		if err != nil {
 			return nil, err
 		}
@@ -480,7 +477,11 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, by int6
 		}
 
 		n += by
-		tx.Set(key, []byte(strconv.FormatInt(n, 10)))
+		_, err = s.writeLargeObject(tx, key, []byte(strconv.FormatInt(n, 10)))
+		if err != nil {
+			return nil, err
+		}
+
 		return n, nil
 	})
 	if err != nil {
