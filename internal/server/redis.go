@@ -94,7 +94,7 @@ func (sess *redisSession) write(s *server, msg string) {
 }
 
 func isValidKey(key string) bool {
-	// This could get expensive if we have very long keys, but for now it's fine
+	// This could get expensive if we have a lot of illegal runes, but for now it's fine
 	for _, r := range illegalKeyRunes {
 		if strings.ContainsRune(key, r) {
 			return false
