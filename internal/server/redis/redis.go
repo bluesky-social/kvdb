@@ -320,6 +320,10 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 	ctx, span := s.tracer.Start(ctx, "handleSet") // nolint
 	defer span.End()
 
+	if len(args) < 2 {
+		return "", recordErr(span, fmt.Errorf("incorrect number of arguments for set"))
+	}
+
 	key, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
