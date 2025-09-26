@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"bufio"
 	"bytes"
 	"strings"
 	"testing"
@@ -226,4 +227,321 @@ func TestIncrDecr(t *testing.T) {
 		},
 	})
 	require.Equal(resp.FormatInt(-5), res)
+}
+
+// order-independant array comparison
+func requireArraysEqual(t *testing.T, expected []string, actualResp string) {
+	val, err := resp.ParseRESP3Value(bufio.NewReader(strings.NewReader(actualResp)))
+	require.NoError(t, err)
+	require.Equal(t, resp.TypeArray, val.Type)
+
+	valArr, ok := val.Value.([]resp.Value)
+	require.True(t, ok)
+
+	actual := map[string]any{}
+	for _, v := range valArr {
+		str, ok := v.Value.(string)
+		require.True(t, ok)
+		actual[str] = struct{}{}
+	}
+
+	require.Equal(t, len(expected), len(actual))
+
+	// check that ever member exists in the array
+	for _, exp := range expected {
+		require.Contains(t, actual, exp)
+	}
+}
+
+func TestSets(t *testing.T) {
+	require := require.New(t)
+	ctx := t.Context()
+	sess := testSession(t)
+
+	set1 := testutil.RandString(24)
+	val1 := testutil.RandString(24)
+	val2 := testutil.RandString(24)
+
+	{
+		// invalid arguments
+		res := sess.handleCommand(ctx, &resp.Command{
+			Name: "SADD",
+			Args: []resp.Value{resp.SimpleStringValue(set1)},
+		})
+		requireRESPError(t, res)
+
+		res = sess.handleCommand(ctx, &resp.Command{
+			Name: "SADD",
+			Args: []resp.Value{},
+		})
+		requireRESPError(t, res)
+	}
+
+	// add val1 to the set
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "SADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue(val1),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	// invalid arguments
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireRESPError(t, res)
+
+	// check that val1 is in the set and val2 is not
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(val1),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(true), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(false), res)
+
+	// check if an item is in a set that does not exist
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{
+			resp.SimpleStringValue("invalid"),
+			resp.SimpleStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(false), res)
+
+	// check on the size of the set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SCARD",
+		Args: []resp.Value{resp.SimpleStringValue("invalid")},
+	})
+	require.Equal(resp.FormatInt(0), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SCARD",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	// check member lists
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue("invalid")},
+	})
+	requireArraysEqual(t, []string{}, res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireArraysEqual(t, []string{val1}, res)
+
+	// add a second member to the set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	// check its members again
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireArraysEqual(t, []string{val1, val2}, res)
+
+	// invalid arguments
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{},
+	})
+	requireRESPError(t, res)
+
+	// intersect a set with nothing
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireArraysEqual(t, []string{val1, val2}, res)
+
+	// intersect a set with itself
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set1),
+		},
+	})
+	requireArraysEqual(t, []string{val1, val2}, res)
+
+	// intersect against a set that does not exist
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue("invalid"),
+		},
+	})
+	requireArraysEqual(t, []string{}, res)
+
+	set2 := testutil.RandString(24)
+	val3 := testutil.RandString(24)
+	val4 := testutil.RandString(24)
+
+	// create a second set with multiple keys at once
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set2),
+			resp.BulkStringValue(val3),
+			resp.BulkStringValue(val4),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	// intersection between set1 and set2 should be zero
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set2),
+		},
+	})
+	requireArraysEqual(t, []string{}, res)
+
+	// add some overlap between the sets
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set2),
+			resp.BulkStringValue(val1),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	// intersection should now contain one value
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set2),
+		},
+	})
+	requireArraysEqual(t, []string{val1}, res)
+
+	// @TODO: fix unions
+	// // union should be all values
+	// res = sess.handleCommand(ctx, &resp.Command{
+	// 	Name: "SUNION",
+	// 	Args: []resp.Value{
+	// 		resp.SimpleStringValue(set1),
+	// 		resp.SimpleStringValue(set2),
+	// 	},
+	// })
+	// requireArraysEqual(t, []string{val1, val2, val3, val4}, res)
+
+	// // invalid arguments
+	// res = sess.handleCommand(ctx, &resp.Command{
+	// 	Name: "SUNION",
+	// 	Args: []resp.Value{},
+	// })
+	// requireRESPError(t, res)
+
+	// // union of one set is just the set
+	// res = sess.handleCommand(ctx, &resp.Command{
+	// 	Name: "SUNION",
+	// 	Args: []resp.Value{
+	// 		resp.SimpleStringValue(set2),
+	// 	},
+	// })
+	// requireArraysEqual(t, []string{val3, val4}, res)
+
+	// remove an item from the set and check that it no longer exists
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SREM",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(val1),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(true), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(val1),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(false), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireArraysEqual(t, []string{val2}, res)
+
+	// invalid arguments
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SDIFF",
+		Args: []resp.Value{},
+	})
+	requireRESPError(t, res)
+
+	// diff with one item is just the set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SDIFF",
+		Args: []resp.Value{resp.SimpleStringValue(set2)},
+	})
+	requireArraysEqual(t, []string{val1, val3, val4}, res)
+
+	// diff in one direction
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SDIFF",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set2),
+		},
+	})
+	requireArraysEqual(t, []string{val2}, res)
+
+	// diff in the other direction
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SDIFF",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set2),
+			resp.SimpleStringValue(set1),
+		},
+	})
+	requireArraysEqual(t, []string{val1, val3, val4}, res)
+
+	// @TODO: fix set deletion
+	// // delete the whole set and check that it's gone
+	// res = sess.handleCommand(ctx, &resp.Command{
+	// 	Name: "DEL",
+	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
+	// })
+	// require.Equal(resp.FormatBoolAsInt(true), res)
+
+	// res = sess.handleCommand(ctx, &resp.Command{
+	// 	Name: "SMEMBERS",
+	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
+	// })
+	// requireArraysEqual(t, []string{}, res)
 }

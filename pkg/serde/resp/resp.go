@@ -488,6 +488,13 @@ func FormatArrayOfBulkStrings(strs []string) string {
 	return b.String()
 }
 
+func ArrayOfBulkStringsValue(strs []string) Value {
+	return Value{
+		Type:  TypeArray,
+		Value: FormatArrayOfBulkStrings(strs),
+	}
+}
+
 func FormatNil() string {
 	return "_\r\n"
 }

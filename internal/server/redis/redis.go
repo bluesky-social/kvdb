@@ -1293,7 +1293,7 @@ func (s *session) handleSetUnion(ctx context.Context, args []resp.Value) (string
 }
 
 func (s *session) redisSetUnion(ctx context.Context, setKeys []string) ([]string, error) {
-	ctx, span := s.tracer.Start(ctx, "redisSetUnion") // nolint
+	ctx, span := s.tracer.Start(ctx, "redisSetUnion")
 	defer span.End()
 
 	if len(setKeys) == 0 {
