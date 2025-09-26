@@ -23,6 +23,23 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const (
+	uidSequencePrefix  = "uid_sequence/"
+	memberToUidPrefix  = "member_to_uid/"
+	uidToMemberPrefix  = "uid_to_member/"
+	setPrefix          = "set/"
+	maxValBytes        = 100_000  // 100k
+	blobIndexSeparator = '\u21FB' // ⇻ used as a separator between the key and the chunk index
+	blobSuffixStart    = "0000001"
+	blobSuffixEnd      = "9999999"
+)
+
+var illegalKeyRunes = []rune{
+	blobIndexSeparator,
+}
+
+var ErrInvalidKey = errors.New("invalid key: contains illegal characters")
+
 func (s *server) serveRedis(wg *sync.WaitGroup, done <-chan any, args *Args) {
 	defer wg.Done()
 
@@ -74,6 +91,16 @@ func (sess *redisSession) write(s *server, msg string) {
 	if err != nil {
 		s.log.Warn("failed to write message to client", "err", err)
 	}
+}
+
+func isValidKey(key string) bool {
+	// This could get expensive if we have a lot of illegal runes, but for now it's fine
+	for _, r := range illegalKeyRunes {
+		if strings.ContainsRune(key, r) {
+			return false
+		}
+	}
+	return true
 }
 
 func formatSimpleString(str string) string {
@@ -217,6 +244,18 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 	return res
 }
 
+func extractKeyArg(val resp.Value) (string, error) {
+	key, err := extractStringArg(val)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse key argument: %w", err)
+	}
+
+	if !isValidKey(key) {
+		return "", ErrInvalidKey
+	}
+	return key, nil
+}
+
 func extractStringArg(val resp.Value) (string, error) {
 	switch val.Type {
 	case resp.TypeSimpleString:
@@ -312,13 +351,17 @@ func (s *server) handleRedisExists(ctx context.Context, args []resp.Value) (stri
 }
 
 func (s *server) redisGet(args []resp.Value) ([]byte, error) {
-	arg, err := extractStringArg(args[0])
+	key, err := extractStringArg(args[0])
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse argument: %w", err)
 	}
 
+	if !isValidKey(key) {
+		return nil, ErrInvalidKey
+	}
+
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		return tx.Get(fdb.Key(arg)).Get()
+		return tx.Get(fdb.Key(key)).Get()
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get value: %w", err)
@@ -336,7 +379,7 @@ func (s *server) handleRedisSet(ctx context.Context, args []resp.Value) (string,
 	ctx, span := s.tracer.Start(ctx, "handleRedisSet") // nolint
 	defer span.End()
 
-	key, err := extractStringArg(args[0])
+	key, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
@@ -361,7 +404,7 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 	ctx, span := s.tracer.Start(ctx, "handleRedisDelete") // nolint
 	defer span.End()
 
-	key, err := extractStringArg(args[0])
+	key, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
@@ -474,10 +517,11 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by 
 	ctx, span := s.tracer.Start(ctx, "handleRedisIncrDecr") // nolint
 	defer span.End()
 
-	k, err := extractStringArg(args[0])
+	k, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
+
 	key := fdb.Key(k)
 
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
@@ -512,18 +556,6 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by 
 	return formatInt(n), nil
 }
 
-// implement sets as serialized Roaring Bitmaps with interned keys we store in FDB
-
-const (
-	uidSequencePrefix = "uid_sequence/"
-	memberToUidPrefix = "member_to_uid/"
-	uidToMemberPrefix = "uid_to_member/"
-	setPrefix         = "set/"
-	maxValBytes       = 100_000 // 100k
-	blobSuffixStart   = "-0000001"
-	blobSuffixEnd     = "-9999999"
-)
-
 func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
 	start := time.Now()
 
@@ -556,7 +588,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 
 	r := concurrent.New[int, []byte]()
 	chunks, err := r.Do(context.Background(), iters, func(i int) ([]byte, error) {
-		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
+		chunkKey := fmt.Sprintf("%s%c%07d", key, blobIndexSeparator, i+1)
 		val, err := tx.Get(fdb.Key(chunkKey)).Get()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunk %d: %w", i+1, err)
@@ -594,8 +626,8 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 
 	// First clear any existing chunks
 	tx.ClearRange(fdb.KeyRange{
-		Begin: fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixStart)),
-		End:   fdb.Key(fmt.Sprintf("%s-%s", key, blobSuffixEnd)),
+		Begin: fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixStart)),
+		End:   fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixEnd)),
 	})
 
 	// Write the length of the object at the key without a suffix
@@ -612,7 +644,7 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 	_, _ = r.Do(context.Background(), iters, func(i int) (any, error) {
 		start := i * maxValBytes
 		end := min((i+1)*maxValBytes, totalLength)
-		chunkKey := fmt.Sprintf("%s-%07d", key, i+1)
+		chunkKey := fmt.Sprintf("%s%c%07d", key, blobIndexSeparator, i+1)
 		tx.Set(fdb.Key(chunkKey), data[start:end])
 		return nil, nil
 	})
@@ -785,7 +817,7 @@ func (s *server) handleRedisSetAdd(ctx context.Context, args []resp.Value) (stri
 		return "", recordErr(span, fmt.Errorf("SADD requires at least 2 arguments"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -878,7 +910,7 @@ func (s *server) handleRedisSetRemove(ctx context.Context, args []resp.Value) (s
 		return "", recordErr(span, fmt.Errorf("SREM requires at least 2 arguments"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -976,7 +1008,7 @@ func (s *server) handleRedisSetIsMember(ctx context.Context, args []resp.Value) 
 		return "", recordErr(span, fmt.Errorf("SISMEMBER requires exactly 2 arguments"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -1043,7 +1075,7 @@ func (s *server) handleRedisSetCard(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, fmt.Errorf("SCARD requires exactly 1 argument"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -1100,7 +1132,7 @@ func (s *server) handleRedisSetMembers(ctx context.Context, args []resp.Value) (
 		return "", recordErr(span, fmt.Errorf("SMEMBERS requires exactly 1 argument"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -1173,7 +1205,7 @@ func (s *server) handleRedisSetInter(ctx context.Context, args []resp.Value) (st
 
 	var setKeys []string
 	for _, arg := range args {
-		setKey, err := extractStringArg(arg)
+		setKey, err := extractKeyArg(arg)
 		if err != nil {
 			return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 		}
