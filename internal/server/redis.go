@@ -587,7 +587,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 
 	r := concurrent.New[int, []byte]()
 	chunks, err := r.Do(context.Background(), iters, func(i int) ([]byte, error) {
-		chunkKey := fmt.Sprintf("%s%s%07d", key, blobIndexSeparator, i+1)
+		chunkKey := fmt.Sprintf("%s%c%07d", key, blobIndexSeparator, i+1)
 		val, err := tx.Get(fdb.Key(chunkKey)).Get()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunk %d: %w", i+1, err)
@@ -625,8 +625,8 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 
 	// First clear any existing chunks
 	tx.ClearRange(fdb.KeyRange{
-		Begin: fdb.Key(fmt.Sprintf("%s%s%s", key, blobIndexSeparator, blobSuffixStart)),
-		End:   fdb.Key(fmt.Sprintf("%s%s%s", key, blobIndexSeparator, blobSuffixEnd)),
+		Begin: fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixStart)),
+		End:   fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixEnd)),
 	})
 
 	// Write the length of the object at the key without a suffix
@@ -643,7 +643,7 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 	_, _ = r.Do(context.Background(), iters, func(i int) (any, error) {
 		start := i * maxValBytes
 		end := min((i+1)*maxValBytes, totalLength)
-		chunkKey := fmt.Sprintf("%s%s%07d", key, blobIndexSeparator, i+1)
+		chunkKey := fmt.Sprintf("%s%c%07d", key, blobIndexSeparator, i+1)
 		tx.Set(fdb.Key(chunkKey), data[start:end])
 		return nil, nil
 	})
