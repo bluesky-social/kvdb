@@ -28,11 +28,15 @@ const (
 	memberToUidPrefix  = "member_to_uid/"
 	uidToMemberPrefix  = "uid_to_member/"
 	setPrefix          = "set/"
-	maxValBytes        = 100_000    // 100k
-	blobIndexSeparator = "\x21\xFB" // ⇻ used as a separator between the key and the chunk index, should be stripped from input keys
+	maxValBytes        = 100_000  // 100k
+	blobIndexSeparator = '\u21FB' // ⇻ used as a separator between the key and the chunk index
 	blobSuffixStart    = "0000001"
 	blobSuffixEnd      = "9999999"
 )
+
+var illegalKeyRunes = []rune{
+	blobIndexSeparator,
+}
 
 var ErrInvalidKey = errors.New("invalid key: contains illegal characters")
 
@@ -87,6 +91,15 @@ func (sess *redisSession) write(s *server, msg string) {
 	if err != nil {
 		s.log.Warn("failed to write message to client", "err", err)
 	}
+}
+
+func isValidKey(key string) bool {
+	for _, r := range illegalKeyRunes {
+		if strings.ContainsRune(key, r) {
+			return false
+		}
+	}
+	return true
 }
 
 func formatSimpleString(str string) string {
@@ -230,6 +243,18 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 	return res
 }
 
+func extractKeyArg(val resp.Value) (string, error) {
+	key, err := extractStringArg(val)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse key argument: %w", err)
+	}
+
+	if !isValidKey(key) {
+		return "", ErrInvalidKey
+	}
+	return key, nil
+}
+
 func extractStringArg(val resp.Value) (string, error) {
 	switch val.Type {
 	case resp.TypeSimpleString:
@@ -325,17 +350,17 @@ func (s *server) handleRedisExists(ctx context.Context, args []resp.Value) (stri
 }
 
 func (s *server) redisGet(args []resp.Value) ([]byte, error) {
-	arg, err := extractStringArg(args[0])
+	key, err := extractStringArg(args[0])
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse argument: %w", err)
 	}
 
-	if strings.Contains(arg, blobIndexSeparator) {
-		return nil, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey)
+	if !isValidKey(key) {
+		return nil, ErrInvalidKey
 	}
 
 	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		return tx.Get(fdb.Key(arg)).Get()
+		return tx.Get(fdb.Key(key)).Get()
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get value: %w", err)
@@ -353,13 +378,9 @@ func (s *server) handleRedisSet(ctx context.Context, args []resp.Value) (string,
 	ctx, span := s.tracer.Start(ctx, "handleRedisSet") // nolint
 	defer span.End()
 
-	key, err := extractStringArg(args[0])
+	key, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
-	}
-
-	if strings.Contains(key, blobIndexSeparator) {
-		return "", recordErr(span, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey))
 	}
 
 	value, err := extractStringArg(args[1])
@@ -382,13 +403,9 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 	ctx, span := s.tracer.Start(ctx, "handleRedisDelete") // nolint
 	defer span.End()
 
-	key, err := extractStringArg(args[0])
+	key, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
-	}
-
-	if strings.Contains(key, blobIndexSeparator) {
-		return "", recordErr(span, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey))
 	}
 
 	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
@@ -499,13 +516,9 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by 
 	ctx, span := s.tracer.Start(ctx, "handleRedisIncrDecr") // nolint
 	defer span.End()
 
-	k, err := extractStringArg(args[0])
+	k, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
-	}
-
-	if strings.Contains(k, blobIndexSeparator) {
-		return "", recordErr(span, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey))
 	}
 
 	key := fdb.Key(k)
@@ -544,10 +557,6 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by 
 
 func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
 	start := time.Now()
-
-	if strings.Contains(key, blobIndexSeparator) {
-		return nil, fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey)
-	}
 
 	// Fetch the Metadata Key with the total length of the blob
 	val, err := tx.Get(fdb.Key(key)).Get()
@@ -606,10 +615,6 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 
 func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) error {
 	start := time.Now()
-
-	if strings.Contains(key, blobIndexSeparator) {
-		return fmt.Errorf("%w: key cannot contain blob index separator", ErrInvalidKey)
-	}
 
 	// Write the object in chunks of maxValBytes
 	totalLength := len(data)
@@ -811,7 +816,7 @@ func (s *server) handleRedisSetAdd(ctx context.Context, args []resp.Value) (stri
 		return "", recordErr(span, fmt.Errorf("SADD requires at least 2 arguments"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -904,7 +909,7 @@ func (s *server) handleRedisSetRemove(ctx context.Context, args []resp.Value) (s
 		return "", recordErr(span, fmt.Errorf("SREM requires at least 2 arguments"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -1002,7 +1007,7 @@ func (s *server) handleRedisSetIsMember(ctx context.Context, args []resp.Value) 
 		return "", recordErr(span, fmt.Errorf("SISMEMBER requires exactly 2 arguments"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -1069,7 +1074,7 @@ func (s *server) handleRedisSetCard(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, fmt.Errorf("SCARD requires exactly 1 argument"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -1126,7 +1131,7 @@ func (s *server) handleRedisSetMembers(ctx context.Context, args []resp.Value) (
 		return "", recordErr(span, fmt.Errorf("SMEMBERS requires exactly 1 argument"))
 	}
 
-	setKey, err := extractStringArg(args[0])
+	setKey, err := extractKeyArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -1199,7 +1204,7 @@ func (s *server) handleRedisSetInter(ctx context.Context, args []resp.Value) (st
 
 	var setKeys []string
 	for _, arg := range args {
-		setKey, err := extractStringArg(arg)
+		setKey, err := extractKeyArg(arg)
 		if err != nil {
 			return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 		}
