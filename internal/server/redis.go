@@ -556,6 +556,11 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by 
 	return formatInt(n), nil
 }
 
+// Large Objects are implemented by chunking the object into pieces of maxValBytes
+// The root key stores the total length of the object as a string
+// Each chunk is stored at key + blobIndexSeparator + chunkIndex (1-based, zero-padded to 7 digits)
+// e.g. "mykey⇻0000001", "mykey⇻0000002", ...
+// Large Objects are written and read in a single transaction and so transaction duration limits apply
 func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
 	start := time.Now()
 
@@ -614,9 +619,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 	return buf, nil
 }
 
-func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) error {
-	start := time.Now()
-
+func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) (int64, error) {
 	// Write the object in chunks of maxValBytes
 	totalLength := len(data)
 	rangeEnd := (totalLength / maxValBytes) + 1
@@ -648,10 +651,7 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) e
 		tx.Set(fdb.Key(chunkKey), data[start:end])
 		return nil, nil
 	})
-
-	s.log.Info("wrote large object", "key", key, "total_length", totalLength, "num_chunks", rangeEnd, "duration", time.Since(start).String())
-
-	return nil
+	return int64(totalLength), nil
 }
 
 // allocate a new unique 64-bit UID
@@ -857,12 +857,13 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		return 0, recordErr(span, fmt.Errorf("failed to get UIDs for members: %w", err))
 	}
 
+	start := time.Now()
 	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// Get the Bitmap if it exists
 		bitmapKey := setPrefix + setKey
 		blob, err := s.readLargeObject(tx, bitmapKey)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read large object: %w", err)
+			return int64(0), fmt.Errorf("failed to read large object: %w", err)
 		}
 
 		// If the key doesn't exist, create a new bitmap
@@ -872,7 +873,7 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		} else if len(blob) > 0 {
 			bitmap = roaring.New()
 			if err := bitmap.UnmarshalBinary(blob); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+				return int64(0), fmt.Errorf("failed to unmarshal bitmap: %w", err)
 			}
 		}
 
@@ -882,24 +883,27 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 		// serialize and store the updated bitmap as a large object
 		data, err := bitmap.MarshalBinary()
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal bitmap: %w", err)
+			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
-		if err := s.writeLargeObject(tx, bitmapKey, data); err != nil {
-			return nil, fmt.Errorf("failed to write large object: %w", err)
+		bytesWritten, err := s.writeLargeObject(tx, bitmapKey, data)
+		if err != nil {
+			return int64(0), fmt.Errorf("failed to write large object: %w", err)
 		}
 
-		return int64(len(uids)), nil
+		return bytesWritten, nil
 	})
 	if err != nil {
 		return 0, recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
 	}
 
-	added, ok := res.(int64)
+	bytesWritten, ok := res.(int64)
 	if !ok {
-		return 0, recordErr(span, fmt.Errorf("invalid added type: %T", res))
+		return 0, recordErr(span, fmt.Errorf("invalid bytesWritten type: %T", res))
 	}
 
-	return added, nil
+	s.log.Info("updated bitmap", "size", bytesWritten, "duration", time.Since(start).String())
+
+	return int64(len(uids)), nil
 }
 
 func (s *server) handleRedisSetRemove(ctx context.Context, args []resp.Value) (string, error) {
@@ -956,17 +960,17 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 		bitmapKey := setPrefix + setKey
 		blob, err := s.readLargeObject(tx, bitmapKey)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read large object: %w", err)
+			return int64(0), fmt.Errorf("failed to read large object: %w", err)
 		}
 
 		if len(blob) == 0 {
 			// set does not exist, nothing to remove
-			return nil, nil
+			return int64(0), nil
 		}
 
 		bitmap := roaring.New()
 		if err := bitmap.UnmarshalBinary(blob); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+			return int64(0), fmt.Errorf("failed to unmarshal bitmap: %w", err)
 		}
 
 		removed := int64(0)
@@ -980,10 +984,11 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 		// serialize and store the updated bitmap
 		data, err := bitmap.MarshalBinary()
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal bitmap: %w", err)
+			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
-		if err := s.writeLargeObject(tx, bitmapKey, data); err != nil {
-			return nil, fmt.Errorf("failed to write large object: %w", err)
+		_, err = s.writeLargeObject(tx, bitmapKey, data)
+		if err != nil {
+			return int64(0), fmt.Errorf("failed to write large object: %w", err)
 		}
 
 		return removed, nil
