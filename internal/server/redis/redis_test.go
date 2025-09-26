@@ -29,6 +29,10 @@ func requireRESPError(t *testing.T, str string) {
 	require.True(t, strings.HasPrefix(str, "-"))
 }
 
+func requireNoRESPError(t *testing.T, str string) {
+	require.False(t, strings.HasPrefix(str, "-"))
+}
+
 func TestPing(t *testing.T) {
 	require := require.New(t)
 	ctx := t.Context()
@@ -86,6 +90,21 @@ func TestBasicCRUD(t *testing.T) {
 		require.Equal(resp.FormatBoolAsInt(false), res)
 	}
 
+	checkValid := func() {
+		// test entry retreival
+		res := sess.handleCommand(ctx, &resp.Command{
+			Name: "GET",
+			Args: []resp.Value{resp.SimpleStringValue(key)},
+		})
+		require.Equal(resp.FormatBulkString(val), res)
+
+		res = sess.handleCommand(ctx, &resp.Command{
+			Name: "EXISTS",
+			Args: []resp.Value{resp.SimpleStringValue(key)},
+		})
+		require.Equal(resp.FormatBoolAsInt(true), res)
+	}
+
 	{
 		// test entry creation
 		res := sess.handleCommand(ctx, &resp.Command{
@@ -102,24 +121,9 @@ func TestBasicCRUD(t *testing.T) {
 			},
 		})
 		require.Equal(resp.FormatSimpleString("OK"), res)
+
+		checkValid()
 	}
-
-	check := func() {
-		// test entry retreival
-		res := sess.handleCommand(ctx, &resp.Command{
-			Name: "GET",
-			Args: []resp.Value{resp.SimpleStringValue(key)},
-		})
-		require.Equal(resp.FormatBulkString(val), res)
-
-		res = sess.handleCommand(ctx, &resp.Command{
-			Name: "EXISTS",
-			Args: []resp.Value{resp.SimpleStringValue(key)},
-		})
-		require.Equal(resp.FormatBoolAsInt(true), res)
-	}
-
-	check()
 
 	{
 		// test updating an existing item and check again
@@ -131,9 +135,9 @@ func TestBasicCRUD(t *testing.T) {
 			},
 		})
 		require.Equal(resp.FormatSimpleString("OK"), res)
-	}
 
-	check()
+		checkValid()
+	}
 
 	{
 		// delete the item and ensure it's gone
@@ -162,4 +166,64 @@ func TestBasicCRUD(t *testing.T) {
 		})
 		require.Equal(resp.FormatBoolAsInt(false), res)
 	}
+}
+
+func TestIncrDecr(t *testing.T) {
+	require := require.New(t)
+	ctx := t.Context()
+	sess := testSession(t)
+
+	key := testutil.RandString(24)
+
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "INCR",
+		Args: []resp.Value{resp.SimpleStringValue(key)},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	for range 4 {
+		res := sess.handleCommand(ctx, &resp.Command{
+			Name: "INCR",
+			Args: []resp.Value{resp.SimpleStringValue(key)},
+		})
+		requireNoRESPError(t, res)
+	}
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "GET",
+		Args: []resp.Value{resp.SimpleStringValue(key)},
+	})
+	require.Equal(resp.FormatBulkString("5"), res)
+
+	for range 10 {
+		res := sess.handleCommand(ctx, &resp.Command{
+			Name: "DECR",
+			Args: []resp.Value{resp.SimpleStringValue(key)},
+		})
+		requireNoRESPError(t, res)
+	}
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "GET",
+		Args: []resp.Value{resp.SimpleStringValue(key)},
+	})
+	require.Equal(resp.FormatBulkString("-5"), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "INCRBY",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.BulkStringValue("10"),
+		},
+	})
+	require.Equal(resp.FormatInt(5), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "DECRBY",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.BulkStringValue("10"),
+		},
+	})
+	require.Equal(resp.FormatInt(-5), res)
 }
