@@ -220,6 +220,10 @@ func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) stri
 		res, err = s.handleRedisSetMembers(ctx, cmd.Args)
 	case "sinter":
 		res, err = s.handleRedisSetInter(ctx, cmd.Args)
+	case "sunion":
+		res, err = s.handleRedisSetUnion(ctx, cmd.Args)
+	case "sdiff":
+		res, err = s.handleRedisSetDiff(ctx, cmd.Args)
 	case "incr":
 		res, err = s.handleRedisIncr(ctx, cmd.Args)
 	case "incrby":
@@ -409,22 +413,16 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
 
-	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		val, err := tx.Get(fdb.Key(key)).Get()
-		if err != nil {
-			return nil, err
-		}
-
-		tx.Clear(fdb.Key(key))
-		return len(val) > 0, nil
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		return s.deleteLargeObject(tx, key)
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to delete value: %w", err))
 	}
 
-	exists, ok := existsAny.(bool)
+	exists, ok := res.(bool)
 	if !ok {
-		return "", recordErr(span, fmt.Errorf("failed to cast exists of type %T to a bool", existsAny))
+		return "", recordErr(span, fmt.Errorf("failed to cast exists of type %T to a bool", res))
 	}
 
 	return formatBoolAsInt(exists), nil
@@ -652,6 +650,25 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) (
 		return nil, nil
 	})
 	return int64(totalLength), nil
+}
+
+func (s *server) deleteLargeObject(tx fdb.Transaction, key string) (bool, error) {
+	// Check if the object exists
+	val, err := tx.Get(fdb.Key(key)).Get()
+	if err != nil {
+		return false, fmt.Errorf("failed to get large object: %w", err)
+	}
+
+	// Clear all chunks with the blob suffix range
+	tx.ClearRange(fdb.KeyRange{
+		Begin: fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixStart)),
+		End:   fdb.Key(fmt.Sprintf("%s%c%s", key, blobIndexSeparator, blobSuffixEnd)),
+	})
+
+	// Clear the main key
+	tx.Clear(fdb.Key(key))
+
+	return len(val) > 0, nil
 }
 
 // allocate a new unique 64-bit UID
@@ -981,6 +998,14 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 			}
 		}
 
+		// If the set is now empty, delete the large object
+		if bitmap.IsEmpty() {
+			if _, err := s.deleteLargeObject(tx, bitmapKey); err != nil {
+				return int64(0), fmt.Errorf("failed to delete large object: %w", err)
+			}
+			return removed, nil
+		}
+
 		// serialize and store the updated bitmap
 		data, err := bitmap.MarshalBinary()
 		if err != nil {
@@ -1282,6 +1307,208 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 			return []string{}, nil
 		}
 		resultBitmap.And(bitmap)
+	}
+
+	if resultBitmap == nil || resultBitmap.IsEmpty() {
+		return []string{}, nil
+	}
+
+	// convert UIDs back to members
+	uids := resultBitmap.ToArray()
+	r2 := concurrent.New[uint64, string]()
+	members, err := r2.Do(ctx, uids, func(u uint64) (string, error) {
+		return s.uidToMember(ctx, u)
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to get members for UIDs: %w", err))
+	}
+
+	return members, nil
+}
+
+func (s *server) handleRedisSetUnion(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSetUnion") // nolint
+	defer span.End()
+
+	if len(args) < 1 {
+		return "", recordErr(span, fmt.Errorf("SUNION requires at least 1 argument"))
+	}
+
+	var setKeys []string
+	for _, arg := range args {
+		setKey, err := extractKeyArg(arg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+		}
+		setKeys = append(setKeys, setKey)
+	}
+
+	members, err := s.redisSetUnion(ctx, setKeys)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to compute set union: %w", err))
+	}
+
+	return formatArrayOfBulkStrings(members), nil
+}
+
+func (s *server) redisSetUnion(ctx context.Context, setKeys []string) ([]string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetUnion") // nolint
+	defer span.End()
+
+	if len(setKeys) == 0 {
+		return []string{}, nil
+	}
+
+	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		r := concurrent.New[string, []byte]()
+		blobs, err := r.Do(ctx, setKeys, func(setKey string) ([]byte, error) {
+			bitmapKey := setPrefix + setKey
+			blob, err := s.readLargeObject(tx, bitmapKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read large object for set %q: %w", setKey, err)
+			}
+			return blob, nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to read bitmaps for sets: %w", err)
+		}
+		return blobs, nil
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to compute set union: %w", err))
+	}
+
+	blobs, ok := res.([][]byte)
+	if !ok {
+		return nil, recordErr(span, fmt.Errorf("invalid blobs type: %T", res))
+	}
+
+	// Unmarshal and union all bitmaps
+	r := concurrent.New[[]byte, *roaring.Bitmap]()
+	bitmaps, err := r.Do(ctx, blobs, func(blob []byte) (*roaring.Bitmap, error) {
+		if len(blob) == 0 {
+			// empty bitmap
+			return roaring.New(), nil
+		}
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+		}
+		return bitmap, nil
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to unmarshal bitmaps: %w", err))
+	}
+
+	// Union all bitmaps
+	resultBitmap := roaring.New()
+	for _, bitmap := range bitmaps {
+		if bitmap == nil || bitmap.IsEmpty() {
+			// union with empty set is no-op
+			continue
+		}
+		resultBitmap.Or(bitmap)
+	}
+
+	if resultBitmap == nil || resultBitmap.IsEmpty() {
+		return []string{}, nil
+	}
+
+	// convert UIDs back to members
+	uids := resultBitmap.ToArray()
+	r2 := concurrent.New[uint64, string]()
+	members, err := r2.Do(ctx, uids, func(u uint64) (string, error) {
+		return s.uidToMember(ctx, u)
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to get members for UIDs: %w", err))
+	}
+
+	return members, nil
+}
+
+func (s *server) handleRedisSetDiff(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRedisSetDiff") // nolint
+	defer span.End()
+
+	if len(args) < 1 {
+		return "", recordErr(span, fmt.Errorf("SDIFF requires at least 1 argument"))
+	}
+
+	var setKeys []string
+	for _, arg := range args {
+		setKey, err := extractKeyArg(arg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+		}
+		setKeys = append(setKeys, setKey)
+	}
+
+	members, err := s.redisSetDiff(ctx, setKeys)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to compute set difference: %w", err))
+	}
+
+	return formatArrayOfBulkStrings(members), nil
+}
+
+func (s *server) redisSetDiff(ctx context.Context, setKeys []string) ([]string, error) {
+	ctx, span := s.tracer.Start(ctx, "redisSetDiff") // nolint
+	defer span.End()
+
+	if len(setKeys) == 0 {
+		return []string{}, nil
+	}
+
+	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		r := concurrent.New[string, []byte]()
+		blobs, err := r.Do(ctx, setKeys, func(setKey string) ([]byte, error) {
+			bitmapKey := setPrefix + setKey
+			blob, err := s.readLargeObject(tx, bitmapKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read large object for set %q: %w", setKey, err)
+			}
+			return blob, nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to read bitmaps for sets: %w", err)
+		}
+		return blobs, nil
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to compute set difference: %w", err))
+	}
+
+	blobs, ok := res.([][]byte)
+	if !ok {
+		return nil, recordErr(span, fmt.Errorf("invalid blobs type: %T", res))
+	}
+
+	// Unmarshal and difference all bitmaps
+	r := concurrent.New[[]byte, *roaring.Bitmap]()
+	bitmaps, err := r.Do(ctx, blobs, func(blob []byte) (*roaring.Bitmap, error) {
+		if len(blob) == 0 {
+			// empty bitmap
+			return roaring.New(), nil
+		}
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+		}
+		return bitmap, nil
+	})
+	if err != nil {
+		return nil, recordErr(span, fmt.Errorf("failed to unmarshal bitmaps: %w", err))
+	}
+
+	// Difference all bitmaps
+	resultBitmap := bitmaps[0]
+	for _, bitmap := range bitmaps[1:] {
+		if bitmap == nil || bitmap.IsEmpty() {
+			// difference with empty set is no-op
+			continue
+		}
+		resultBitmap.AndNot(bitmap)
 	}
 
 	if resultBitmap == nil || resultBitmap.IsEmpty() {
