@@ -1,4 +1,4 @@
-package server
+package redis
 
 import (
 	"bufio"
@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net"
-	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	roaring "github.com/RoaringBitmap/roaring/v2/roaring64"
@@ -19,6 +18,7 @@ import (
 	"github.com/bluesky-social/go-util/pkg/concurrent"
 	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -40,54 +40,32 @@ var illegalKeyRunes = []rune{
 
 var ErrInvalidKey = errors.New("invalid key: contains illegal characters")
 
-func (s *server) serveRedis(wg *sync.WaitGroup, done <-chan any, args *Args) {
-	defer wg.Done()
+type session struct {
+	log    *slog.Logger
+	tracer trace.Tracer
 
-	l, err := net.Listen("tcp", args.RedisAddr)
-	if err != nil {
-		s.log.Error("failed to initialize redis listener", "err", err)
-		os.Exit(1)
-	}
-
-	s.log.Info("redis server listening", "addr", args.RedisAddr)
-
-	go func() {
-		// wait until the user requests that the server is shut down, then close the listener
-		<-done
-		if err := l.Close(); err != nil {
-			s.log.Error("failed to close redis server", "err", err)
-			os.Exit(1)
-		}
-	}()
-
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			select {
-			case <-done:
-				s.log.Info("redis server stopped")
-				return
-			default:
-			}
-
-			s.log.Warn("failed to accept client connection", "err", err)
-			continue
-		}
-
-		go s.handleRedisConn(context.Background(), &redisSession{
-			conn:   conn,
-			reader: bufio.NewReader(conn),
-		})
-	}
-}
-
-type redisSession struct {
+	fdb    fdb.Database
 	conn   net.Conn
 	reader *bufio.Reader
 }
 
-func (sess *redisSession) write(s *server, msg string) {
-	_, err := sess.conn.Write([]byte(msg))
+type NewSessionArgs struct {
+	FDB  fdb.Database
+	Conn net.Conn
+}
+
+func NewSession(args *NewSessionArgs) *session {
+	return &session{
+		log:    slog.Default().With(slog.String("group", "server")),
+		tracer: otel.Tracer("kvdb"),
+		fdb:    args.FDB,
+		conn:   args.Conn,
+		reader: bufio.NewReader(args.Conn),
+	}
+}
+
+func (s *session) write(msg string) {
+	_, err := s.conn.Write([]byte(msg))
 	if err != nil {
 		s.log.Warn("failed to write message to client", "err", err)
 	}
@@ -140,9 +118,9 @@ func formatError(err error) string {
 	return fmt.Sprintf("-ERR %s\r\n", err)
 }
 
-func (s *server) handleRedisConn(ctx context.Context, sess *redisSession) {
+func (s *session) Serve(ctx context.Context) {
 	defer func() {
-		if err := sess.conn.Close(); err != nil {
+		if err := s.conn.Close(); err != nil {
 			s.log.Warn("failed to close client connection", "err", err)
 		}
 	}()
@@ -151,21 +129,21 @@ func (s *server) handleRedisConn(ctx context.Context, sess *redisSession) {
 	defer span.End()
 
 	for {
-		cmd, err := s.parseRedisCommand(ctx, sess.reader)
+		cmd, err := s.parseRedisCommand(ctx, s.reader)
 		if errors.Is(err, io.EOF) {
 			return
 		}
 		if err != nil {
-			sess.write(s, formatError(fmt.Errorf("failed to parse command: %w", err)))
+			s.write(formatError(fmt.Errorf("failed to parse command: %w", err)))
 			continue
 		}
 
 		resp := s.handleRedisCommand(ctx, cmd)
-		sess.write(s, resp)
+		s.write(resp)
 	}
 }
 
-func (s *server) parseRedisCommand(ctx context.Context, reader *bufio.Reader) (*resp.Command, error) {
+func (s *session) parseRedisCommand(ctx context.Context, reader *bufio.Reader) (*resp.Command, error) {
 	ctx, span := s.tracer.Start(ctx, "parseRedisCommand") // nolint
 	defer span.End()
 
@@ -177,7 +155,7 @@ func (s *server) parseRedisCommand(ctx context.Context, reader *bufio.Reader) (*
 	return cmd, nil
 }
 
-func (s *server) handleRedisCommand(ctx context.Context, cmd *resp.Command) string {
+func (s *session) handleRedisCommand(ctx context.Context, cmd *resp.Command) string {
 	ctx, span := s.tracer.Start(ctx, "handleRedisCommand") // nolint
 	defer span.End()
 
@@ -308,7 +286,7 @@ func recordErr(span trace.Span, err error) error {
 	return err
 }
 
-func (s *server) handleRedisPing(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisPing(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisPing") // nolint
 	defer span.End()
 
@@ -325,7 +303,7 @@ func (s *server) handleRedisPing(ctx context.Context, args []resp.Value) (string
 	return resp, nil
 }
 
-func (s *server) handleRedisGet(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisGet(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisGet") // nolint
 	defer span.End()
 
@@ -342,7 +320,7 @@ func (s *server) handleRedisGet(ctx context.Context, args []resp.Value) (string,
 	return formatBulkString(string(val)), nil
 }
 
-func (s *server) handleRedisExists(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisExists(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisExists") // nolint
 	defer span.End()
 
@@ -354,7 +332,7 @@ func (s *server) handleRedisExists(ctx context.Context, args []resp.Value) (stri
 	return formatBoolAsInt(len(val) > 0), nil
 }
 
-func (s *server) redisGet(args []resp.Value) ([]byte, error) {
+func (s *session) redisGet(args []resp.Value) ([]byte, error) {
 	key, err := extractStringArg(args[0])
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse argument: %w", err)
@@ -379,7 +357,7 @@ func (s *server) redisGet(args []resp.Value) ([]byte, error) {
 	return val, nil
 }
 
-func (s *server) handleRedisSet(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSet(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSet") // nolint
 	defer span.End()
 
@@ -404,7 +382,7 @@ func (s *server) handleRedisSet(ctx context.Context, args []resp.Value) (string,
 	return formatSimpleString("OK"), nil
 }
 
-func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisDelete(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisDelete") // nolint
 	defer span.End()
 
@@ -428,7 +406,7 @@ func (s *server) handleRedisDelete(ctx context.Context, args []resp.Value) (stri
 	return formatBoolAsInt(exists), nil
 }
 
-func (s *server) handleRedisIncr(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisIncr(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisIncr")
 	defer span.End()
 
@@ -441,7 +419,7 @@ func (s *server) handleRedisIncr(ctx context.Context, args []resp.Value) (string
 	return res, nil
 }
 
-func (s *server) handleRedisIncrBy(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisIncrBy(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisIncrBy")
 	defer span.End()
 
@@ -468,7 +446,7 @@ func (s *server) handleRedisIncrBy(ctx context.Context, args []resp.Value) (stri
 	return res, nil
 }
 
-func (s *server) handleRedisDecr(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisDecr(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisDecr")
 	defer span.End()
 
@@ -481,7 +459,7 @@ func (s *server) handleRedisDecr(ctx context.Context, args []resp.Value) (string
 	return res, nil
 }
 
-func (s *server) handleRedisDecrBy(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisDecrBy(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisDecrBy")
 	defer span.End()
 
@@ -511,7 +489,7 @@ func (s *server) handleRedisDecrBy(ctx context.Context, args []resp.Value) (stri
 	return res, nil
 }
 
-func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by int64) (string, error) {
+func (s *session) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by int64) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisIncrDecr") // nolint
 	defer span.End()
 
@@ -559,7 +537,7 @@ func (s *server) handleRedisIncrDecr(ctx context.Context, args []resp.Value, by 
 // Each chunk is stored at key + blobIndexSeparator + chunkIndex (1-based, zero-padded to 7 digits)
 // e.g. "mykey⇻0000001", "mykey⇻0000002", ...
 // Large Objects are written and read in a single transaction and so transaction duration limits apply
-func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
+func (s *session) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, error) {
 	start := time.Now()
 
 	// Fetch the Metadata Key with the total length of the blob
@@ -617,7 +595,7 @@ func (s *server) readLargeObject(tx fdb.ReadTransaction, key string) ([]byte, er
 	return buf, nil
 }
 
-func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) (int64, error) {
+func (s *session) writeLargeObject(tx fdb.Transaction, key string, data []byte) (int64, error) {
 	// Write the object in chunks of maxValBytes
 	totalLength := len(data)
 	rangeEnd := (totalLength / maxValBytes) + 1
@@ -652,7 +630,7 @@ func (s *server) writeLargeObject(tx fdb.Transaction, key string, data []byte) (
 	return int64(totalLength), nil
 }
 
-func (s *server) deleteLargeObject(tx fdb.Transaction, key string) (bool, error) {
+func (s *session) deleteLargeObject(tx fdb.Transaction, key string) (bool, error) {
 	// Check if the object exists
 	val, err := tx.Get(fdb.Key(key)).Get()
 	if err != nil {
@@ -675,7 +653,7 @@ func (s *server) deleteLargeObject(tx fdb.Transaction, key string) (bool, error)
 // The upper 32 bits are a random sequence number
 // The lower 32 bits are a sequential number within that sequence
 // This allows for up to 4 billion unique IDs per sequence and very low contention when allocating new IDs
-func (s *server) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, error) {
+func (s *session) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, error) {
 	span.AddEvent("allocateNewUID")
 
 	// sequenceNum is the random uint32 sequence we are using for this allocation
@@ -731,7 +709,7 @@ func (s *server) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, er
 // If peek is true, it will only look up the UID without creating a new one
 // If peeking and the member does not exist, it returns 0 without an error
 // UIDs start at 1, so 0 is never a valid UID
-func (s *server) getUID(ctx context.Context, member string, peek bool) (uint64, error) {
+func (s *session) getUID(ctx context.Context, member string, peek bool) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "getUID") // nolint
 	defer span.End()
 	var memberToUIDKey = memberToUidPrefix + member
@@ -795,7 +773,7 @@ func (s *server) getUID(ctx context.Context, member string, peek bool) (uint64, 
 	return uid, nil
 }
 
-func (s *server) uidToMember(ctx context.Context, uid uint64) (string, error) {
+func (s *session) uidToMember(ctx context.Context, uid uint64) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "uidToMember") // nolint
 	defer span.End()
 
@@ -826,7 +804,7 @@ func (s *server) uidToMember(ctx context.Context, uid uint64) (string, error) {
 	return member, nil
 }
 
-func (s *server) handleRedisSetAdd(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSetAdd(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSetAdd") // nolint
 	defer span.End()
 
@@ -856,7 +834,7 @@ func (s *server) handleRedisSetAdd(ctx context.Context, args []resp.Value) (stri
 	return formatInt(added), nil
 }
 
-func (s *server) redisSetAdd(ctx context.Context, setKey string, members []string) (int64, error) {
+func (s *session) redisSetAdd(ctx context.Context, setKey string, members []string) (int64, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetAdd") // nolint
 	defer span.End()
 
@@ -923,7 +901,7 @@ func (s *server) redisSetAdd(ctx context.Context, setKey string, members []strin
 	return int64(len(uids)), nil
 }
 
-func (s *server) handleRedisSetRemove(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSetRemove(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSetRemove") // nolint
 	defer span.End()
 
@@ -953,7 +931,7 @@ func (s *server) handleRedisSetRemove(ctx context.Context, args []resp.Value) (s
 	return formatInt(removed), nil
 }
 
-func (s *server) redisSetRemove(ctx context.Context, setKey string, members []string) (int64, error) {
+func (s *session) redisSetRemove(ctx context.Context, setKey string, members []string) (int64, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetRemove") // nolint
 	defer span.End()
 
@@ -1030,7 +1008,7 @@ func (s *server) redisSetRemove(ctx context.Context, setKey string, members []st
 	return removed, nil
 }
 
-func (s *server) handleRedisSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSetIsMember") // nolint
 	defer span.End()
 
@@ -1056,7 +1034,7 @@ func (s *server) handleRedisSetIsMember(ctx context.Context, args []resp.Value) 
 	return formatBoolAsInt(isMember), nil
 }
 
-func (s *server) redisSetIsMember(ctx context.Context, setKey string, member string) (bool, error) {
+func (s *session) redisSetIsMember(ctx context.Context, setKey string, member string) (bool, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetIsMember") // nolint
 	defer span.End()
 
@@ -1097,7 +1075,7 @@ func (s *server) redisSetIsMember(ctx context.Context, setKey string, member str
 	return bitmap.Contains(uid), nil
 }
 
-func (s *server) handleRedisSetCard(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSetCard(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSetCard") // nolint
 	defer span.End()
 
@@ -1118,7 +1096,7 @@ func (s *server) handleRedisSetCard(ctx context.Context, args []resp.Value) (str
 	return formatInt(card), nil
 }
 
-func (s *server) redisSetCard(ctx context.Context, setKey string) (int64, error) {
+func (s *session) redisSetCard(ctx context.Context, setKey string) (int64, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetCard") // nolint
 	defer span.End()
 
@@ -1154,7 +1132,7 @@ func (s *server) redisSetCard(ctx context.Context, setKey string) (int64, error)
 	return int64(bitmap.GetCardinality()), nil
 }
 
-func (s *server) handleRedisSetMembers(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSetMembers(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSetMembers") // nolint
 	defer span.End()
 
@@ -1175,7 +1153,7 @@ func (s *server) handleRedisSetMembers(ctx context.Context, args []resp.Value) (
 	return formatArrayOfBulkStrings(members), nil
 }
 
-func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, error) {
+func (s *session) redisSetMembers(ctx context.Context, setKey string) ([]string, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetMembers") // nolint
 	defer span.End()
 
@@ -1225,7 +1203,7 @@ func (s *server) redisSetMembers(ctx context.Context, setKey string) ([]string, 
 	return members, nil
 }
 
-func (s *server) handleRedisSetInter(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSetInter(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSetInter") // nolint
 	defer span.End()
 
@@ -1250,7 +1228,7 @@ func (s *server) handleRedisSetInter(ctx context.Context, args []resp.Value) (st
 	return formatArrayOfBulkStrings(members), nil
 }
 
-func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string, error) {
+func (s *session) redisSetInter(ctx context.Context, setKeys []string) ([]string, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetInter") // nolint
 	defer span.End()
 
@@ -1326,7 +1304,7 @@ func (s *server) redisSetInter(ctx context.Context, setKeys []string) ([]string,
 	return members, nil
 }
 
-func (s *server) handleRedisSetUnion(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSetUnion(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSetUnion") // nolint
 	defer span.End()
 
@@ -1351,7 +1329,7 @@ func (s *server) handleRedisSetUnion(ctx context.Context, args []resp.Value) (st
 	return formatArrayOfBulkStrings(members), nil
 }
 
-func (s *server) redisSetUnion(ctx context.Context, setKeys []string) ([]string, error) {
+func (s *session) redisSetUnion(ctx context.Context, setKeys []string) ([]string, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetUnion") // nolint
 	defer span.End()
 
@@ -1427,7 +1405,7 @@ func (s *server) redisSetUnion(ctx context.Context, setKeys []string) ([]string,
 	return members, nil
 }
 
-func (s *server) handleRedisSetDiff(ctx context.Context, args []resp.Value) (string, error) {
+func (s *session) handleRedisSetDiff(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRedisSetDiff") // nolint
 	defer span.End()
 
@@ -1452,7 +1430,7 @@ func (s *server) handleRedisSetDiff(ctx context.Context, args []resp.Value) (str
 	return formatArrayOfBulkStrings(members), nil
 }
 
-func (s *server) redisSetDiff(ctx context.Context, setKeys []string) ([]string, error) {
+func (s *session) redisSetDiff(ctx context.Context, setKeys []string) ([]string, error) {
 	ctx, span := s.tracer.Start(ctx, "redisSetDiff") // nolint
 	defer span.End()
 

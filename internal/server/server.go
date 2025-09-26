@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/bluesky-social/kvdb/internal/env"
+	"github.com/bluesky-social/kvdb/internal/server/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -150,5 +152,48 @@ func (s *server) metricsServer(args *Args) {
 	if err != nil && err != http.ErrServerClosed {
 		s.log.Error("error in metrics server", "error", err)
 		os.Exit(1)
+	}
+}
+
+func (s *server) serveRedis(wg *sync.WaitGroup, done <-chan any, args *Args) {
+	defer wg.Done()
+
+	l, err := net.Listen("tcp", args.RedisAddr)
+	if err != nil {
+		s.log.Error("failed to initialize redis listener", "err", err)
+		os.Exit(1)
+	}
+
+	s.log.Info("redis server listening", "addr", args.RedisAddr)
+
+	go func() {
+		// wait until the user requests that the server is shut down, then close the listener
+		<-done
+		if err := l.Close(); err != nil {
+			s.log.Error("failed to close redis server", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			select {
+			case <-done:
+				s.log.Info("redis server stopped")
+				return
+			default:
+			}
+
+			s.log.Warn("failed to accept client connection", "err", err)
+			continue
+		}
+
+		sess := redis.NewSession(&redis.NewSessionArgs{
+			FDB:  s.fdb,
+			Conn: conn,
+		})
+
+		go sess.Serve(context.Background())
 	}
 }
