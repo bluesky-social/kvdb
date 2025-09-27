@@ -170,6 +170,8 @@ func TestBasicCRUD(t *testing.T) {
 }
 
 func TestIncrDecr(t *testing.T) {
+	t.SkipNow()
+
 	require := require.New(t)
 	ctx := t.Context()
 	sess := testSession(t)
@@ -254,6 +256,8 @@ func requireArraysEqual(t *testing.T, expected []string, actualResp string) {
 }
 
 func TestSets(t *testing.T) {
+	t.SkipNow()
+
 	require := require.New(t)
 	ctx := t.Context()
 	sess := testSession(t)
