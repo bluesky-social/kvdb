@@ -29,26 +29,30 @@ import (
 
 type Args struct {
 	MetricsAddr string
-	RedisAddr   string
 
 	FDBClusterFile           string
 	FDBAPIVersion            int
 	FDBTransactionTimeout    int64
 	FDBTransactionRetryLimit int64
+
+	RedisAddr      string
+	RedisAdminUser string
+	RedisAdminPass string
 }
 
 type server struct {
 	log    *slog.Logger
 	tracer trace.Tracer
 
-	fdb fdb.Database
+	fdb       fdb.Database
+	redisDirs *redis.Directories
 }
 
 func newServer(ctx context.Context, args *Args) (*server, error) {
+	// initialize tracing
 	if !env.IsProd() {
 		otel.SetTracerProvider(noop.NewTracerProvider())
 	} else {
-		// initialize tracing
 		exp, err := otlptracehttp.New(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create otlp exporter: %w", err)
@@ -96,6 +100,11 @@ func newServer(ctx context.Context, args *Args) (*server, error) {
 	}
 	if err := s.fdb.Options().SetTransactionRetryLimit(args.FDBTransactionRetryLimit); err != nil {
 		return nil, fmt.Errorf("failed to set fdb transaction retry limit: %w", err)
+	}
+
+	s.redisDirs, err = redis.InitDirectories(s.fdb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize redis directories: %w", err)
 	}
 
 	return s, nil
@@ -198,8 +207,9 @@ func (s *server) serveRedis(wg *sync.WaitGroup, done <-chan any, args *Args) {
 		}
 
 		sess := redis.NewSession(&redis.NewSessionArgs{
-			FDB:  s.fdb,
 			Conn: conn,
+			FDB:  s.fdb,
+			Dirs: s.redisDirs,
 		})
 
 		go func() {

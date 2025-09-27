@@ -7,6 +7,10 @@ default: lint test
 install-tools:
     go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.0.2
 
+    go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+    go install github.com/bufbuild/buf/cmd/buf@v1.54.0
+    go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.18.1
+
 # Stands up local development dependencies in docker
 up:
     #!/usr/bin/env bash
@@ -18,6 +22,8 @@ up:
             exit 1
         fi
     fi
+
+    echo "development environment is ready"
 
 # Tears down the local development dependencies
 down:
@@ -50,3 +56,13 @@ cover:
 # Connects to the local foundationdb developement server
 fdbcli:
     fdbcli -C foundation.cluster
+
+# Generates protobuf sources
+build-protos:
+    #!/usr/bin/env bash
+    set +x
+
+    pushd internal/types > /dev/null
+
+    buf lint
+    buf generate

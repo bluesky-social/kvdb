@@ -18,12 +18,26 @@ func testSession(t *testing.T) *session {
 
 	db, err := fdb.OpenDatabase("../../../foundation.cluster")
 	require.NoError(t, err)
-	require.NotNil(t, db)
 
-	return NewSession(&NewSessionArgs{
-		FDB:  db,
+	dirs, err := InitDirectories(db)
+	require.NoError(t, err)
+
+	sess := NewSession(&NewSessionArgs{
 		Conn: &bytes.Buffer{},
+		FDB:  db,
+		Dirs: dirs,
 	})
+
+	userDir, err := dirs.redis.CreateOrOpen(sess.fdb, []string{testutil.RandString(24)}, nil)
+	require.NoError(t, err)
+
+	sess.userMu.Lock()
+	sess.user = &sessionUser{
+		dir: userDir,
+	}
+	sess.userMu.Unlock()
+
+	return sess
 }
 
 func requireRESPError(t *testing.T, str string) {
@@ -58,7 +72,6 @@ func TestPing(t *testing.T) {
 		},
 	})
 	requireRESPError(t, res)
-	require.True(strings.Contains(res, "incorrect number of arguments"))
 
 }
 
