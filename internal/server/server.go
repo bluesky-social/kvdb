@@ -18,7 +18,13 @@ import (
 	"github.com/bluesky-social/kvdb/internal/server/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 type Args struct {
@@ -39,26 +45,28 @@ type server struct {
 }
 
 func newServer(ctx context.Context, args *Args) (*server, error) {
-	// {
-	// 	// initialize tracing
-	// 	exp, err := otlptracehttp.New(ctx)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("failed to create otlp exporter: %w", err)
-	// 	}
-	// 	tp := tracesdk.NewTracerProvider(
-	// 		tracesdk.WithBatcher(exp),
-	// 		tracesdk.WithResource(resource.NewWithAttributes(
-	// 			semconv.SchemaURL,
-	// 			semconv.ServiceNameKey.String("monsoon"),
-	// 		)),
-	// 	)
-	// 	otel.SetTracerProvider(tp)
-	// 	tc := propagation.NewCompositeTextMapPropagator(
-	// 		propagation.TraceContext{},
-	// 		propagation.Baggage{},
-	// 	)
-	// 	otel.SetTextMapPropagator(tc)
-	// }
+	if !env.IsProd() {
+		otel.SetTracerProvider(noop.NewTracerProvider())
+	} else {
+		// initialize tracing
+		exp, err := otlptracehttp.New(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create otlp exporter: %w", err)
+		}
+		tp := tracesdk.NewTracerProvider(
+			tracesdk.WithBatcher(exp),
+			tracesdk.WithResource(resource.NewWithAttributes(
+				semconv.SchemaURL,
+				semconv.ServiceNameKey.String("kvdb"),
+			)),
+		)
+		otel.SetTracerProvider(tp)
+		tc := propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{},
+			propagation.Baggage{},
+		)
+		otel.SetTextMapPropagator(tc)
+	}
 
 	s := &server{
 		log:    slog.Default().With(slog.String("group", "server")),
