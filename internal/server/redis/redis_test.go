@@ -258,6 +258,18 @@ func TestAuthentication(t *testing.T) {
 			},
 		})
 		requireNoRESPError(t, res)
+
+		// attempting to create again should fail because the user already exists
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue(username),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(gtPass),
+			},
+		})
+		requireRESPError(t, res)
 	}
 
 	// log in as the new user

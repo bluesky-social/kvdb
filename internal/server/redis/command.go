@@ -225,6 +225,18 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	//
+	// Ensure the user does not already exist
+	//
+
+	existing, err := s.getUser(ctx, username)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to check if user already exists: %w", err))
+	}
+	if existing != nil {
+		return "", recordErr(span, fmt.Errorf("failed to create user because a user with username %q already exists", username))
+	}
+
+	//
 	// Create the user in the users directory
 	//
 
