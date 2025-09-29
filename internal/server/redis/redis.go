@@ -23,13 +23,14 @@ import (
 )
 
 const (
-	uidSequencePrefix  = "uid_sequence/"
-	memberToUidPrefix  = "member_to_uid/"
-	uidToMemberPrefix  = "uid_to_member/"
-	maxValBytes        = 100_000  // 100k
-	blobIndexSeparator = '\u21FB' // ⇻ used as a separator between the key and the chunk index
-	blobSuffixStart    = "0000001"
-	blobSuffixEnd      = "9999999"
+	uidSequenceIDBitWidth = 16 // How many bits of a uint64 UID are used for the sequence ID
+	uidSequencePrefix     = "uid_sequence/"
+	memberToUidPrefix     = "member_to_uid/"
+	uidToMemberPrefix     = "uid_to_member/"
+	maxValBytes           = 100_000  // 100k
+	blobIndexSeparator    = '\u21FB' // ⇻ used as a separator between the key and the chunk index
+	blobSuffixStart       = "0000001"
+	blobSuffixEnd         = "9999999"
 )
 
 var illegalKeyRunes = []rune{
@@ -613,23 +614,28 @@ func (s *session) deleteLargeObject(tx fdb.Transaction, key string) (bool, error
 }
 
 // allocate a new unique 64-bit UID
-// The upper 32 bits are a random sequence number
-// The lower 32 bits are a sequential number within that sequence
-// This allows for up to 4 billion unique IDs per sequence and very low contention when allocating new IDs
+// The upper bits are a random sequence number
+// The lower bits are a sequential number within that sequence
+// This allows for a large number of unique IDs per sequence and very low contention when allocating new IDs
 func (s *session) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, error) {
 	span.AddEvent("allocateNewUID")
 
-	// sequenceNum is the random uint32 sequence we are using for this allocation
-	var sequenceNum uint32
+	// sequenceNum is the random sequence we are using for this allocation
+	var sequenceNum uint64
 	var sequenceKey string
 
-	// assignedUID is the uint32 within the sequence we will assign
-	var assignedUID uint32
+	// assignedUID is the value within the sequence we will assign
+	var assignedUID uint64
+
+	const (
+		maxSequenceID  = 1 << uidSequenceIDBitWidth
+		maxAssignedUID = (1 << (64 - uidSequenceIDBitWidth)) - 1
+	)
 
 	// Try up to 5 times to find a sequence that is not exhausted
 	for range 5 {
 		// Pick a random uint32 as the sequence we will be using for this member
-		sequenceNum = rand.Uint32()
+		sequenceNum = rand.Uint64N(maxSequenceID)
 		sequenceKey = fmt.Sprintf("%s%d", uidSequencePrefix, sequenceNum)
 
 		val, err := tx.Get(fdb.Key(sequenceKey)).Get()
@@ -639,17 +645,17 @@ func (s *session) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, e
 		if len(val) == 0 {
 			assignedUID = 1
 		} else {
-			lastUID, err := strconv.ParseUint(string(val), 10, 32)
+			lastUID, err := strconv.ParseUint(string(val), 10, 64)
 			if err != nil {
 				return 0, recordErr(span, fmt.Errorf("failed to parse last UID: %w", err))
 			}
 
 			// If we have exhausted this sequence, pick a new random sequence
-			if lastUID >= 0xFFFFFFFF {
+			if lastUID >= maxAssignedUID {
 				continue
 			}
 
-			assignedUID = uint32(lastUID) + 1
+			assignedUID = lastUID + 1
 		}
 	}
 
@@ -659,10 +665,10 @@ func (s *session) allocateNewUID(span trace.Span, tx fdb.Transaction) (uint64, e
 	}
 
 	// Assemble the 64-bit UID from the sequence and assigned UID
-	newUID := (uint64(sequenceNum) << 32) | uint64(assignedUID)
+	newUID := (sequenceNum << uidSequenceIDBitWidth) | assignedUID
 
 	// Store the assigned UID back to the sequence key for the next allocation
-	tx.Set(fdb.Key(sequenceKey), []byte(strconv.FormatUint(uint64(assignedUID), 10)))
+	tx.Set(fdb.Key(sequenceKey), []byte(strconv.FormatUint(assignedUID, 10)))
 
 	// Return the full 64-bit UID
 	return newUID, nil
