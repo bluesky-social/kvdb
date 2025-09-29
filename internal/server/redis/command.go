@@ -91,10 +91,21 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("failed to initialize user directory: %w", err))
 	}
 
+	objDir, err := userDir.CreateOrOpen(s.fdb, []string{"obj"}, nil)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to initialize user object directory: %w", err))
+	}
+
+	metaDir, err := userDir.CreateOrOpen(s.fdb, []string{"meta"}, nil)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to initialize user meta directory: %w", err))
+	}
+
 	s.userMu.Lock()
 	s.user = &sessionUser{
-		dir:  userDir,
-		user: user,
+		objDir:  objDir,
+		metaDir: metaDir,
+		user:    user,
 	}
 	s.userMu.Unlock()
 
@@ -326,7 +337,7 @@ func (s *session) redisGet(args []resp.Value) ([]byte, error) {
 		return nil, fmt.Errorf("failed to parse argument: %w", err)
 	}
 
-	key, err := s.userKey(tuple.Tuple{keyStr})
+	key, err := s.objKey(tuple.Tuple{keyStr})
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +375,7 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 		return "", recordErr(span, fmt.Errorf("failed to parse value argument: %w", err))
 	}
 
-	key, err := s.userKey(tuple.Tuple{keyStr})
+	key, err := s.objKey(tuple.Tuple{keyStr})
 	if err != nil {
 		return "", recordErr(span, err)
 	}
@@ -394,7 +405,7 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
 
-	key, err := s.userKey(tuple.Tuple{keyStr})
+	key, err := s.objKey(tuple.Tuple{keyStr})
 	if err != nil {
 		return "", recordErr(span, err)
 	}

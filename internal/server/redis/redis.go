@@ -138,7 +138,8 @@ type session struct {
 }
 
 type sessionUser struct {
-	dir directory.DirectorySubspace
+	objDir  directory.DirectorySubspace
+	metaDir directory.DirectorySubspace
 
 	user *types.User
 }
@@ -181,7 +182,7 @@ func (s *session) Serve(ctx context.Context) {
 	span.SetStatus(codes.Ok, "session complete")
 }
 
-func (s *session) userKey(tup tuple.Tuple) (fdb.Key, error) {
+func (s *session) objKey(tup tuple.Tuple) (fdb.Key, error) {
 	s.userMu.RLock()
 	defer s.userMu.RUnlock()
 
@@ -189,7 +190,18 @@ func (s *session) userKey(tup tuple.Tuple) (fdb.Key, error) {
 		return nil, fmt.Errorf("authentication is required")
 	}
 
-	return s.user.dir.Pack(tup), nil
+	return s.user.objDir.Pack(tup), nil
+}
+
+func (s *session) metaKey(tup tuple.Tuple) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	return s.user.metaDir.Pack(tup), nil
 }
 
 func (s *session) write(msg string) {
