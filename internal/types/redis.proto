@@ -8,13 +8,18 @@ import "google/protobuf/timestamp.proto";
 message User {
   string username = 1;
   bytes password_hash = 2;
-  UserKind kind = 3;
-  google.protobuf.Timestamp created_at = 4;
-  google.protobuf.Timestamp last_login = 5;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp last_login = 4;
+  repeated UserACLRule rules = 5;
 }
 
-enum UserKind {
-  USER_KIND_UNSPECIFIED = 0;
-  USER_KIND_CLUSTER_ADMIN = 1;
-  USER_KIND_NORMAL = 2;
+message UserACLRule {
+  UserAccessLevel level = 1;
+}
+
+enum UserAccessLevel {
+  USER_ACCESS_LEVEL_UNSPECIFIED = 0;
+  USER_ACCESS_LEVEL_CLUSTER_ADMIN = 1;
+  USER_ACCESS_LEVEL_READ_WRITE = 3;
+  USER_ACCESS_LEVEL_READ= 4;
 }

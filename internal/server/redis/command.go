@@ -10,7 +10,6 @@ import (
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/codes"
-	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -76,7 +75,7 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 		return resp.FormatError(errInvalidCredentials), nil
 	}
 
-	if err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(pass)); err != nil {
+	if err := comparePasswords(user.PasswordHash, pass); err != nil {
 		span.SetStatus(codes.Ok, "invalid password")
 		return resp.FormatError(errInvalidCredentials), nil
 	}

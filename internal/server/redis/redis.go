@@ -16,11 +16,14 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/bluesky-social/kvdb/internal/metrics"
+	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Directories struct {
@@ -45,6 +48,77 @@ func InitDirectories(db fdb.Database) (dir *Directories, err error) {
 	}
 
 	return
+}
+
+// Seeds the database with an admin user on first-time starutp. Once an admin user has been created
+// on the cluster, no others will be created.
+func InitAdminUser(db fdb.Database, dirs *Directories, username, password string) error {
+	existsKey := dirs.user.Pack(tuple.Tuple{"_admin_user_initialized"})
+
+	existsAny, err := db.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		buf, err := tx.Get(existsKey).Get()
+		if err != nil {
+			return false, nil
+		}
+		if len(buf) == 0 {
+			return false, nil
+		}
+
+		return strconv.ParseBool(string(buf))
+	})
+	if err != nil {
+		return fmt.Errorf("failed to check if admin user has already been set once: %w", err)
+	}
+
+	exists, err := cast[bool](existsAny)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil // admin already created; nothing to do
+	}
+
+	passHash, err := hashPassword(password)
+	if err != nil {
+		return fmt.Errorf("failed to hash admin password: %w", err)
+	}
+
+	now := timestamppb.Now()
+	user := &types.User{
+		Username:     username,
+		PasswordHash: passHash,
+		CreatedAt:    now,
+		LastLogin:    now,
+		Rules: []*types.UserACLRule{{
+			Level: types.UserAccessLevel_USER_ACCESS_LEVEL_CLUSTER_ADMIN,
+		}},
+	}
+
+	userBuf, err := proto.Marshal(user)
+	if err != nil {
+		return fmt.Errorf("failed to proto marshal user: %w", err)
+	}
+
+	usernameKey := dirs.user.Pack(tuple.Tuple{username})
+
+	_, err = db.Transact(func(tx fdb.Transaction) (any, error) {
+		existingBuf, err := tx.Get(usernameKey).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(existingBuf) > 0 {
+			return nil, fmt.Errorf("user with username %q already exists", username)
+		}
+
+		tx.Set(usernameKey, userBuf)
+		tx.Set(existsKey, []byte("true"))
+		return nil, nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create admin user: %w", err)
+	}
+
+	return nil
 }
 
 type session struct {
@@ -267,5 +341,5 @@ func cast[T any](item any) (T, error) {
 	}
 
 	var t T
-	return t, fmt.Errorf("failed to cast item to %T", t)
+	return t, fmt.Errorf("failed to cast to %T", t)
 }

@@ -22,52 +22,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type UserKind int32
+type UserAccessLevel int32
 
 const (
-	UserKind_USER_KIND_UNSPECIFIED   UserKind = 0
-	UserKind_USER_KIND_CLUSTER_ADMIN UserKind = 1
-	UserKind_USER_KIND_NORMAL        UserKind = 2
+	UserAccessLevel_USER_ACCESS_LEVEL_UNSPECIFIED   UserAccessLevel = 0
+	UserAccessLevel_USER_ACCESS_LEVEL_CLUSTER_ADMIN UserAccessLevel = 1
+	UserAccessLevel_USER_ACCESS_LEVEL_READ_WRITE    UserAccessLevel = 3
+	UserAccessLevel_USER_ACCESS_LEVEL_READ          UserAccessLevel = 4
 )
 
-// Enum value maps for UserKind.
+// Enum value maps for UserAccessLevel.
 var (
-	UserKind_name = map[int32]string{
-		0: "USER_KIND_UNSPECIFIED",
-		1: "USER_KIND_CLUSTER_ADMIN",
-		2: "USER_KIND_NORMAL",
+	UserAccessLevel_name = map[int32]string{
+		0: "USER_ACCESS_LEVEL_UNSPECIFIED",
+		1: "USER_ACCESS_LEVEL_CLUSTER_ADMIN",
+		3: "USER_ACCESS_LEVEL_READ_WRITE",
+		4: "USER_ACCESS_LEVEL_READ",
 	}
-	UserKind_value = map[string]int32{
-		"USER_KIND_UNSPECIFIED":   0,
-		"USER_KIND_CLUSTER_ADMIN": 1,
-		"USER_KIND_NORMAL":        2,
+	UserAccessLevel_value = map[string]int32{
+		"USER_ACCESS_LEVEL_UNSPECIFIED":   0,
+		"USER_ACCESS_LEVEL_CLUSTER_ADMIN": 1,
+		"USER_ACCESS_LEVEL_READ_WRITE":    3,
+		"USER_ACCESS_LEVEL_READ":          4,
 	}
 )
 
-func (x UserKind) Enum() *UserKind {
-	p := new(UserKind)
+func (x UserAccessLevel) Enum() *UserAccessLevel {
+	p := new(UserAccessLevel)
 	*p = x
 	return p
 }
 
-func (x UserKind) String() string {
+func (x UserAccessLevel) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (UserKind) Descriptor() protoreflect.EnumDescriptor {
+func (UserAccessLevel) Descriptor() protoreflect.EnumDescriptor {
 	return file_redis_proto_enumTypes[0].Descriptor()
 }
 
-func (UserKind) Type() protoreflect.EnumType {
+func (UserAccessLevel) Type() protoreflect.EnumType {
 	return &file_redis_proto_enumTypes[0]
 }
 
-func (x UserKind) Number() protoreflect.EnumNumber {
+func (x UserAccessLevel) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use UserKind.Descriptor instead.
-func (UserKind) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use UserAccessLevel.Descriptor instead.
+func (UserAccessLevel) EnumDescriptor() ([]byte, []int) {
 	return file_redis_proto_rawDescGZIP(), []int{0}
 }
 
@@ -75,9 +78,9 @@ type User struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
 	PasswordHash  []byte                 `protobuf:"bytes,2,opt,name=password_hash,json=passwordHash,proto3" json:"password_hash,omitempty"`
-	Kind          UserKind               `protobuf:"varint,3,opt,name=kind,proto3,enum=types.UserKind" json:"kind,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	LastLogin     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_login,json=lastLogin,proto3" json:"last_login,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	LastLogin     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_login,json=lastLogin,proto3" json:"last_login,omitempty"`
+	Rules         []*UserACLRule         `protobuf:"bytes,5,rep,name=rules,proto3" json:"rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -126,13 +129,6 @@ func (x *User) GetPasswordHash() []byte {
 	return nil
 }
 
-func (x *User) GetKind() UserKind {
-	if x != nil {
-		return x.Kind
-	}
-	return UserKind_USER_KIND_UNSPECIFIED
-}
-
 func (x *User) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
@@ -147,23 +143,77 @@ func (x *User) GetLastLogin() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *User) GetRules() []*UserACLRule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+type UserACLRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Level         UserAccessLevel        `protobuf:"varint,1,opt,name=level,proto3,enum=types.UserAccessLevel" json:"level,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserACLRule) Reset() {
+	*x = UserACLRule{}
+	mi := &file_redis_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserACLRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserACLRule) ProtoMessage() {}
+
+func (x *UserACLRule) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserACLRule.ProtoReflect.Descriptor instead.
+func (*UserACLRule) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *UserACLRule) GetLevel() UserAccessLevel {
+	if x != nil {
+		return x.Level
+	}
+	return UserAccessLevel_USER_ACCESS_LEVEL_UNSPECIFIED
+}
+
 var File_redis_proto protoreflect.FileDescriptor
 
 const file_redis_proto_rawDesc = "" +
 	"\n" +
-	"\vredis.proto\x12\x05types\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe2\x01\n" +
+	"\vredis.proto\x12\x05types\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe7\x01\n" +
 	"\x04User\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12#\n" +
-	"\rpassword_hash\x18\x02 \x01(\fR\fpasswordHash\x12#\n" +
-	"\x04kind\x18\x03 \x01(\x0e2\x0f.types.UserKindR\x04kind\x129\n" +
+	"\rpassword_hash\x18\x02 \x01(\fR\fpasswordHash\x129\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"last_login\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tlastLogin*X\n" +
-	"\bUserKind\x12\x19\n" +
-	"\x15USER_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
-	"\x17USER_KIND_CLUSTER_ADMIN\x10\x01\x12\x14\n" +
-	"\x10USER_KIND_NORMAL\x10\x02B/Z-github.com/bluesky-social/kvdb/internal/typesb\x06proto3"
+	"last_login\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tlastLogin\x12(\n" +
+	"\x05rules\x18\x05 \x03(\v2\x12.types.UserACLRuleR\x05rules\";\n" +
+	"\vUserACLRule\x12,\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level*\x97\x01\n" +
+	"\x0fUserAccessLevel\x12!\n" +
+	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +
+	"\x1cUSER_ACCESS_LEVEL_READ_WRITE\x10\x03\x12\x1a\n" +
+	"\x16USER_ACCESS_LEVEL_READ\x10\x04B/Z-github.com/bluesky-social/kvdb/internal/typesb\x06proto3"
 
 var (
 	file_redis_proto_rawDescOnce sync.Once
@@ -178,21 +228,23 @@ func file_redis_proto_rawDescGZIP() []byte {
 }
 
 var file_redis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_redis_proto_goTypes = []any{
-	(UserKind)(0),                 // 0: types.UserKind
+	(UserAccessLevel)(0),          // 0: types.UserAccessLevel
 	(*User)(nil),                  // 1: types.User
-	(*timestamppb.Timestamp)(nil), // 2: google.protobuf.Timestamp
+	(*UserACLRule)(nil),           // 2: types.UserACLRule
+	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
 }
 var file_redis_proto_depIdxs = []int32{
-	0, // 0: types.User.kind:type_name -> types.UserKind
-	2, // 1: types.User.created_at:type_name -> google.protobuf.Timestamp
-	2, // 2: types.User.last_login:type_name -> google.protobuf.Timestamp
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 0: types.User.created_at:type_name -> google.protobuf.Timestamp
+	3, // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
+	2, // 2: types.User.rules:type_name -> types.UserACLRule
+	0, // 3: types.UserACLRule.level:type_name -> types.UserAccessLevel
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_redis_proto_init() }
@@ -206,7 +258,7 @@ func file_redis_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_redis_proto_rawDesc), len(file_redis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

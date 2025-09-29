@@ -107,6 +107,13 @@ func newServer(ctx context.Context, args *Args) (*server, error) {
 		return nil, fmt.Errorf("failed to initialize redis directories: %w", err)
 	}
 
+	if args.RedisAdminUser != "" && args.RedisAdminPass != "" {
+		err := redis.InitAdminUser(s.fdb, s.redisDirs, args.RedisAdminUser, args.RedisAdminPass)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return s, nil
 }
 
