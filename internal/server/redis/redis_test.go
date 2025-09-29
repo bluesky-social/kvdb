@@ -3,6 +3,7 @@ package redis
 import (
 	"bufio"
 	"bytes"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -412,6 +413,43 @@ func TestBasicCRUD(t *testing.T) {
 		})
 		require.Equal(resp.FormatBoolAsInt(false), res)
 	}
+}
+
+func TestGetAndSetLargeObjects(t *testing.T) {
+	require := require.New(t)
+	ctx := t.Context()
+	sess := testSessionWithAuth(t)
+
+	key := testutil.RandString(24)
+	const size = 550_000
+	payload := make([]byte, size)
+	for ndx := range size {
+		payload[ndx] = byte(rand.IntN(256))
+	}
+
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "SET",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.BulkStringValue(string(payload)),
+		},
+	})
+	require.Equal(resp.FormatSimpleString("OK"), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "GET",
+		Args: []resp.Value{resp.SimpleStringValue(key)},
+	})
+	requireNoRESPError(t, res)
+
+	val, err := resp.ParseRESP3Value(bufio.NewReader(strings.NewReader(res)))
+	require.NoError(err)
+
+	valStr, ok := val.Value.(string)
+	require.True(ok)
+
+	require.Equal(len(payload), len(valStr))
+	require.Equal(string(payload), valStr)
 }
 
 func TestIncrDecr(t *testing.T) {
