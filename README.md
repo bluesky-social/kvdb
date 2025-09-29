@@ -38,4 +38,29 @@ just run kvdb run
 just fdbcli
 ```
 
-For instance, in one shell, you could run `just run kvdb run`, then in another, you could do `redis-cli set hello world && redis-cli get hello`.
+For instance, in one shell, you could run `just run kvdb run`, then in another, you could do:
+
+```
+redis-cli
+127.0.0.1:6379> auth admin admin
+OK
+127.0.0.1:6379> set hello world
+OK
+127.0.0.1:6379> get hello
+"world"
+127.0.0.1:6379> ACL SETUSER newusername on >password123
+OK
+```
+
+## Keyspace Layout
+
+FoundationDB provides strictly serializable transactions atop an ordered key-value store. The design of our key directory layout for redis is the following:
+
+|Path|Description|
+|-|-|
+|`redis/*`|All data related to the redis implementation atop foundationdb (if we implement other wire protocols in the future, we will also give them their own directory)|
+|`redis/_admin_user_initialized`|Whether or not an admin user has been created on the cluster via the CLI and env vars|
+|`redis/_user/<username>`|The directory of user protobuf objects, stored by username|
+|`redis/<user_id>/*`|Data for an individual redis user|
+|`redis/<user_id>/meta/<obj_id>`|Metadata protobuf object for bookkeeping of stored object blobs|
+|`redis/<user_id>/obj/<obj_id>`|Storage of data objects|

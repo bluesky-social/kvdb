@@ -53,11 +53,6 @@ func main() {
 						Usage: `bind address of the metrics and pprof server (use "" to disable)`,
 					},
 					&cli.StringFlag{
-						Name:  "redis-addr",
-						Value: "0.0.0.0:6379",
-						Usage: "bind address of the redis front end",
-					},
-					&cli.StringFlag{
 						Name:  "fdb-cluster-file",
 						Value: "foundation.cluster",
 						Usage: "path to the foundationdb cluster file for the client",
@@ -77,16 +72,34 @@ func main() {
 						Value: 100,
 						Usage: "max number of retries per aborted transaction",
 					},
+					&cli.StringFlag{
+						Name:  "redis-addr",
+						Value: "0.0.0.0:6379",
+						Usage: "bind address of the redis front end",
+					},
+					&cli.StringFlag{
+						Name:  "redis-admin-user",
+						Value: "admin",
+						Usage: "username of the redis admin user (password is set by the KVDB_REDIS_ADMIN_PASSWORD environment variable)",
+					},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
+					redisAdminPass, err := getEnv("KVDB_REDIS_ADMIN_PASSWORD")
+					if err != nil {
+						return err
+					}
+
 					args := &server.Args{
 						MetricsAddr: c.String("metrics-addr"),
-						RedisAddr:   c.String("redis-addr"),
 
 						FDBClusterFile:           c.String("fdb-cluster-file"),
 						FDBAPIVersion:            c.Int("fdb-api-version"),
 						FDBTransactionTimeout:    c.Int64("fdb-transaction-timeout-millis"),
 						FDBTransactionRetryLimit: c.Int64("fdb-transaction-retry-limit"),
+
+						RedisAddr:      c.String("redis-addr"),
+						RedisAdminUser: c.String("redis-admin-user"),
+						RedisAdminPass: redisAdminPass,
 					}
 
 					if err := server.Run(ctx, args); err != nil {
@@ -133,4 +146,13 @@ func setDefaultLogger(llevel, lfmt string, addSource bool) error {
 
 	slog.SetDefault(slog.New(log.Handler()))
 	return nil
+}
+
+func getEnv(key string) (string, error) {
+	val := os.Getenv(key)
+	if val != "" {
+		return val, nil
+	}
+
+	return "", fmt.Errorf("environment variable value %q is not set", key)
 }

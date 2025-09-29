@@ -18,47 +18,59 @@ import (
 	"github.com/bluesky-social/kvdb/internal/server/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 type Args struct {
 	MetricsAddr string
-	RedisAddr   string
 
 	FDBClusterFile           string
 	FDBAPIVersion            int
 	FDBTransactionTimeout    int64
 	FDBTransactionRetryLimit int64
+
+	RedisAddr      string
+	RedisAdminUser string
+	RedisAdminPass string
 }
 
 type server struct {
 	log    *slog.Logger
 	tracer trace.Tracer
 
-	fdb fdb.Database
+	fdb       fdb.Database
+	redisDirs *redis.Directories
 }
 
 func newServer(ctx context.Context, args *Args) (*server, error) {
-	// {
-	// 	// initialize tracing
-	// 	exp, err := otlptracehttp.New(ctx)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("failed to create otlp exporter: %w", err)
-	// 	}
-	// 	tp := tracesdk.NewTracerProvider(
-	// 		tracesdk.WithBatcher(exp),
-	// 		tracesdk.WithResource(resource.NewWithAttributes(
-	// 			semconv.SchemaURL,
-	// 			semconv.ServiceNameKey.String("monsoon"),
-	// 		)),
-	// 	)
-	// 	otel.SetTracerProvider(tp)
-	// 	tc := propagation.NewCompositeTextMapPropagator(
-	// 		propagation.TraceContext{},
-	// 		propagation.Baggage{},
-	// 	)
-	// 	otel.SetTextMapPropagator(tc)
-	// }
+	// initialize tracing
+	if !env.IsProd() {
+		otel.SetTracerProvider(noop.NewTracerProvider())
+	} else {
+		exp, err := otlptracehttp.New(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create otlp exporter: %w", err)
+		}
+		tp := tracesdk.NewTracerProvider(
+			tracesdk.WithBatcher(exp),
+			tracesdk.WithResource(resource.NewWithAttributes(
+				semconv.SchemaURL,
+				semconv.ServiceNameKey.String("kvdb"),
+			)),
+		)
+		otel.SetTracerProvider(tp)
+		tc := propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{},
+			propagation.Baggage{},
+		)
+		otel.SetTextMapPropagator(tc)
+	}
 
 	s := &server{
 		log:    slog.Default().With(slog.String("group", "server")),
@@ -88,6 +100,18 @@ func newServer(ctx context.Context, args *Args) (*server, error) {
 	}
 	if err := s.fdb.Options().SetTransactionRetryLimit(args.FDBTransactionRetryLimit); err != nil {
 		return nil, fmt.Errorf("failed to set fdb transaction retry limit: %w", err)
+	}
+
+	s.redisDirs, err = redis.InitDirectories(s.fdb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize redis directories: %w", err)
+	}
+
+	if args.RedisAdminUser != "" && args.RedisAdminPass != "" {
+		err := redis.InitAdminUser(s.fdb, s.redisDirs, args.RedisAdminUser, args.RedisAdminPass)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return s, nil
@@ -190,8 +214,9 @@ func (s *server) serveRedis(wg *sync.WaitGroup, done <-chan any, args *Args) {
 		}
 
 		sess := redis.NewSession(&redis.NewSessionArgs{
-			FDB:  s.fdb,
 			Conn: conn,
+			FDB:  s.fdb,
+			Dirs: s.redisDirs,
 		})
 
 		go func() {

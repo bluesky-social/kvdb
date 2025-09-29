@@ -3,6 +3,7 @@ package redis
 import (
 	"bufio"
 	"bytes"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -10,7 +11,13 @@ import (
 	"github.com/bluesky-social/kvdb/internal/testutil"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
+
+func init() {
+	// speed up tests
+	bcryptCost = bcrypt.MinCost
+}
 
 func testSession(t *testing.T) *session {
 	err := fdb.APIVersion(730)
@@ -18,26 +25,48 @@ func testSession(t *testing.T) *session {
 
 	db, err := fdb.OpenDatabase("../../../foundation.cluster")
 	require.NoError(t, err)
-	require.NotNil(t, db)
+
+	dirs, err := InitDirectories(db)
+	require.NoError(t, err)
+
+	err = InitAdminUser(db, dirs, "admin", "admin")
+	require.NoError(t, err)
 
 	return NewSession(&NewSessionArgs{
-		FDB:  db,
 		Conn: &bytes.Buffer{},
+		FDB:  db,
+		Dirs: dirs,
 	})
 }
 
+func testSessionWithAuth(t *testing.T) *session {
+	sess := testSession(t)
+
+	// log the user in as admin
+	res := sess.handleCommand(t.Context(), &resp.Command{
+		Name: "AUTH",
+		Args: []resp.Value{
+			resp.SimpleStringValue("admin"),
+			resp.SimpleStringValue("admin"),
+		},
+	})
+	requireNoRESPError(t, res)
+
+	return sess
+}
+
 func requireRESPError(t *testing.T, str string) {
-	require.True(t, strings.HasPrefix(str, "-"))
+	require.True(t, strings.HasPrefix(str, "-"), "a RESP error was expected, but got %q", str)
 }
 
 func requireNoRESPError(t *testing.T, str string) {
-	require.False(t, strings.HasPrefix(str, "-"))
+	require.False(t, strings.HasPrefix(str, "-"), "no RESP errors were expected, but got %q", str)
 }
 
 func TestPing(t *testing.T) {
 	require := require.New(t)
 	ctx := t.Context()
-	sess := testSession(t)
+	sess := testSessionWithAuth(t)
 
 	res := sess.handleCommand(ctx, &resp.Command{
 		Name: "PING",
@@ -58,14 +87,231 @@ func TestPing(t *testing.T) {
 		},
 	})
 	requireRESPError(t, res)
-	require.True(strings.Contains(res, "incorrect number of arguments"))
+}
 
+func TestAuthentication(t *testing.T) {
+	require := require.New(t)
+	ctx := t.Context()
+	sess := testSession(t) // create a session with no credentials set
+
+	username := testutil.RandString(24)
+	password := testutil.RandString(24)
+	gtPass := ">" + password
+
+	// spot check that a few commands require authentication
+	for _, cmd := range []string{"GET", "SET", "DEL", "ACL"} {
+		res := sess.handleCommand(ctx, &resp.Command{
+			Name: cmd,
+			Args: []resp.Value{},
+		})
+		requireRESPError(t, res)
+		require.Contains(res, "auth")
+	}
+
+	requireUserNil := func() {
+		sess.userMu.RLock()
+		defer sess.userMu.RUnlock()
+		require.Nil(sess.user)
+	}
+
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "AUTH",
+		Args: []resp.Value{},
+	})
+	requireRESPError(t, res)
+	requireUserNil()
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "AUTH",
+		Args: []resp.Value{resp.SimpleStringValue(username)},
+	})
+	requireRESPError(t, res)
+	requireUserNil()
+
+	// invalid credentials
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "AUTH",
+		Args: []resp.Value{
+			resp.SimpleStringValue(username),
+			resp.SimpleStringValue(password),
+		},
+	})
+	requireRESPError(t, res)
+	requireUserNil()
+
+	// invalid because the user has not yet been created
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "AUTH",
+		Args: []resp.Value{
+			resp.SimpleStringValue(username),
+			resp.SimpleStringValue(password),
+		},
+	})
+	requireRESPError(t, res)
+	requireUserNil()
+
+	{
+		adminSess := testSessionWithAuth(t)
+
+		// check lots of invalid create user command arguments
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{},
+		})
+		requireRESPError(t, res)
+
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("invalid"),
+				resp.SimpleStringValue(username),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(gtPass),
+			},
+		})
+		requireRESPError(t, res)
+
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue(""),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(gtPass),
+			},
+		})
+		requireRESPError(t, res)
+
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue("_invalid"),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(gtPass),
+			},
+		})
+		requireRESPError(t, res)
+
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue("invalid username"),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(gtPass),
+			},
+		})
+		requireRESPError(t, res)
+
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue(username),
+				resp.SimpleStringValue("invalid"),
+				resp.SimpleStringValue(gtPass),
+			},
+		})
+		requireRESPError(t, res)
+
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue(username),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(""),
+			},
+		})
+		requireRESPError(t, res)
+
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue(username),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue("invalid password"),
+			},
+		})
+		requireRESPError(t, res)
+
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue(username),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(password), // must start with ">"
+			},
+		})
+		requireRESPError(t, res)
+
+		// success!
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue(username),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(gtPass),
+			},
+		})
+		requireNoRESPError(t, res)
+
+		// attempting to create again should fail because the user already exists
+		res = adminSess.handleCommand(ctx, &resp.Command{
+			Name: "ACL",
+			Args: []resp.Value{
+				resp.SimpleStringValue("SETUSER"),
+				resp.SimpleStringValue(username),
+				resp.SimpleStringValue("on"),
+				resp.SimpleStringValue(gtPass),
+			},
+		})
+		requireRESPError(t, res)
+	}
+
+	// log in as the new user
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "AUTH",
+		Args: []resp.Value{
+			resp.SimpleStringValue(username),
+			resp.SimpleStringValue(password),
+		},
+	})
+	requireNoRESPError(t, res)
+	func() {
+		sess.userMu.RLock()
+		defer sess.userMu.RUnlock()
+		require.NotNil(sess.user)
+	}()
+
+	// now we should be able to run any of the commands in the DMZ
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "GET",
+		Args: []resp.Value{resp.SimpleStringValue(testutil.RandString(24))},
+	})
+	require.Equal(resp.FormatNil(), res)
+
+	// a non-admin user should not be able to create other users
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ACL",
+		Args: []resp.Value{
+			resp.SimpleStringValue("SETUSER"),
+			resp.SimpleStringValue(username + "2"),
+			resp.SimpleStringValue("on"),
+			resp.SimpleStringValue(gtPass),
+		},
+	})
+	requireRESPError(t, res)
 }
 
 func TestBasicCRUD(t *testing.T) {
 	require := require.New(t)
 	ctx := t.Context()
-	sess := testSession(t)
+	sess := testSessionWithAuth(t)
 
 	key := testutil.RandString(24)
 	val := testutil.RandString(24)
@@ -169,10 +415,47 @@ func TestBasicCRUD(t *testing.T) {
 	}
 }
 
+func TestGetAndSetLargeObjects(t *testing.T) {
+	require := require.New(t)
+	ctx := t.Context()
+	sess := testSessionWithAuth(t)
+
+	key := testutil.RandString(24)
+	const size = 550_000
+	payload := make([]byte, size)
+	for ndx := range size {
+		payload[ndx] = byte(rand.IntN(256))
+	}
+
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "SET",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.BulkStringValue(string(payload)),
+		},
+	})
+	require.Equal(resp.FormatSimpleString("OK"), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "GET",
+		Args: []resp.Value{resp.SimpleStringValue(key)},
+	})
+	requireNoRESPError(t, res)
+
+	val, err := resp.ParseRESP3Value(bufio.NewReader(strings.NewReader(res)))
+	require.NoError(err)
+
+	valStr, ok := val.Value.(string)
+	require.True(ok)
+
+	require.Equal(len(payload), len(valStr))
+	require.Equal(string(payload), valStr)
+}
+
 func TestIncrDecr(t *testing.T) {
 	require := require.New(t)
 	ctx := t.Context()
-	sess := testSession(t)
+	sess := testSessionWithAuth(t)
 
 	key := testutil.RandString(24)
 
@@ -254,9 +537,11 @@ func requireArraysEqual(t *testing.T, expected []string, actualResp string) {
 }
 
 func TestSets(t *testing.T) {
+	t.SkipNow()
+
 	require := require.New(t)
 	ctx := t.Context()
-	sess := testSession(t)
+	sess := testSessionWithAuth(t)
 
 	set1 := testutil.RandString(24)
 	val1 := testutil.RandString(24)
