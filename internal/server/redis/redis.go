@@ -139,6 +139,8 @@ type session struct {
 
 type sessionUser struct {
 	dir directory.DirectorySubspace
+
+	user *types.User
 }
 
 type NewSessionArgs struct {
@@ -258,6 +260,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 	}
 
 	switch cmdLower {
+	case "acl":
+		res, err = s.handleACL(ctx, cmd.Args)
 	case "get":
 		res, err = s.handleGet(ctx, cmd.Args)
 	case "exists":

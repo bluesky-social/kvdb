@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
@@ -11,6 +12,7 @@ import (
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/codes"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -91,7 +93,8 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 
 	s.userMu.Lock()
 	s.user = &sessionUser{
-		dir: userDir,
+		dir:  userDir,
+		user: user,
 	}
 	s.userMu.Unlock()
 
@@ -139,6 +142,118 @@ func (s *session) getUser(ctx context.Context, username string) (*types.User, er
 
 	span.SetStatus(codes.Ok, "got user")
 	return user, nil
+}
+
+// Implements a small subset of the standard redis functionality for creating a new user.
+//
+// Example: `ACL SETUSER newusername on >password123 ~* &* +@all`
+func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleACL") // nolint
+	defer span.End()
+
+	//
+	// Validate and parse basic arguments required to create a user and
+	// password that's allowed read+write on all keys and commands
+	//
+
+	if err := validateNumArgs(args, 4); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	cmd, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse acl command argument: %w", err))
+	}
+	if strings.ToLower(cmd) != "setuser" {
+		return "", recordErr(span, fmt.Errorf("only SETUSER is supported"))
+	}
+
+	username, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse username argument: %w", err))
+	}
+
+	on, err := extractStringArg(args[2])
+	if err != nil || strings.ToLower(on) != "on" {
+		return "", recordErr(span, fmt.Errorf(`failed to parse "on" argument`))
+	}
+
+	password, err := extractStringArg(args[3])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse password argument: %w", err))
+	}
+	if !strings.HasPrefix(password, ">") {
+		return "", recordErr(span, fmt.Errorf(`only ">" passwords are supported`))
+	}
+	password = strings.TrimPrefix(password, ">")
+
+	if err := validateUsername(username); err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid username: %w", err))
+	}
+
+	if err := validatePassword(password); err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid password: %w", err))
+	}
+
+	//
+	// Create the user in the users directory
+	//
+
+	passHash, err := hashPassword(password)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to hash password: %w", err))
+	}
+
+	now := timestamppb.Now()
+	user := &types.User{
+		Username:     username,
+		PasswordHash: passHash,
+		CreatedAt:    now,
+		LastLogin:    now,
+		Enabled:      true,
+		Rules: []*types.UserACLRule{{
+			Level: types.UserAccessLevel_USER_ACCESS_LEVEL_CLUSTER_ADMIN,
+		}},
+	}
+
+	userBuf, err := proto.Marshal(user)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to proto marshal user: %w", err))
+	}
+
+	usernameKey := s.dirs.user.Pack(tuple.Tuple{username})
+	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		tx.Set(usernameKey, userBuf)
+		return nil, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to create user object: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "acl handled")
+	return resp.FormatSimpleString("OK"), nil
+}
+
+func validateUsername(u string) error {
+	if u == "" {
+		return fmt.Errorf("username cannot be empty")
+	}
+	if strings.HasPrefix(u, "_") {
+		return fmt.Errorf("username starts with a restricted character")
+	}
+
+	return nil
+}
+
+func validatePassword(p string) error {
+	if p == "" {
+		return fmt.Errorf("password cannot be empty")
+	}
+	if len(p) < 8 {
+		return fmt.Errorf("password is too short")
+	}
+
+	return nil
 }
 
 func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, error) {
