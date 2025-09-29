@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -390,4 +391,141 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 
 	span.SetStatus(codes.Ok, "delete handled")
 	return resp.FormatBoolAsInt(exists), nil
+}
+
+func (s *session) handleIncr(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleIncr")
+	defer span.End()
+
+	res, err := s.handleIncrDecr(ctx, args, "1")
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "incr handled")
+	return resp.FormatInt(res), nil
+}
+
+func (s *session) handleIncrBy(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleIncrBy")
+	defer span.End()
+
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	by, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse increment argument: %w", err))
+	}
+
+	res, err := s.handleIncrDecr(ctx, args, by)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "incrby handled")
+	return resp.FormatInt(res), nil
+}
+
+func (s *session) handleDecr(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleDecr")
+	defer span.End()
+
+	res, err := s.handleIncrDecr(ctx, args, "-1")
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "decr handled")
+	return resp.FormatInt(res), nil
+}
+
+func (s *session) handleDecrBy(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleDecrBy")
+	defer span.End()
+
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	by, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse decrement argument: %w", err))
+	}
+
+	// negate
+	if !strings.HasPrefix(by, "-") {
+		by = "-" + by
+	} else {
+		by = strings.TrimPrefix(by, "-")
+	}
+
+	res, err := s.handleIncrDecr(ctx, args, by)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "decrby handled")
+	return resp.FormatInt(res), nil
+}
+
+func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr string) (int64, error) {
+	ctx, span := s.tracer.Start(ctx, "handleIncrDecr") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 1); err != nil {
+		return 0, err
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse key argument: %w", err)
+	}
+
+	by, err := strconv.ParseInt(byStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid increment %q: %w", byStr, err)
+	}
+
+	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		_, buf, err := s.getObject(tx, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get existing value")
+		}
+
+		if len(buf) == 0 {
+			buf = []byte("0") // create a new value
+		}
+
+		num, err := strconv.ParseInt(string(buf), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse stored numeric: %w", err)
+		}
+
+		num += by
+
+		buf = []byte(strconv.FormatInt(num, 10))
+		if err = s.writeObject(tx, key, buf); err != nil {
+			return nil, fmt.Errorf("failed to write value to database: %w", err)
+		}
+
+		return buf, nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete value: %w", err)
+	}
+
+	res, err := cast[[]byte](resAny)
+	if err != nil {
+		return 0, recordErr(span, err)
+	}
+
+	num, err := strconv.ParseInt(string(res), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse stored value: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "incr decr handled")
+	return num, nil
 }

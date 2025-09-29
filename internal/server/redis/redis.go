@@ -292,6 +292,14 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSet(ctx, cmd.Args)
 	case "del":
 		res, err = s.handleDelete(ctx, cmd.Args)
+	case "incr":
+		res, err = s.handleIncr(ctx, cmd.Args)
+	case "incrby":
+		res, err = s.handleIncrBy(ctx, cmd.Args)
+	case "decr":
+		res, err = s.handleDecr(ctx, cmd.Args)
+	case "decrby":
+		res, err = s.handleDecrBy(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)

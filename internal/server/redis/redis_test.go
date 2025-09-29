@@ -453,8 +453,6 @@ func TestGetAndSetLargeObjects(t *testing.T) {
 }
 
 func TestIncrDecr(t *testing.T) {
-	t.SkipNow()
-
 	require := require.New(t)
 	ctx := t.Context()
 	sess := testSessionWithAuth(t)
