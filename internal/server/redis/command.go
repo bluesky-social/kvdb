@@ -152,6 +152,24 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 	defer span.End()
 
 	//
+	// Only admin users are allowed to create other users
+	//
+
+	err := func() error {
+		s.userMu.RLock()
+		defer s.userMu.RUnlock()
+
+		if !userIsAdmin(s.user.user) {
+			return fmt.Errorf("only admin users are allowed to run ACL commands")
+		}
+
+		return nil
+	}()
+	if err != nil {
+		return "", recordErr(span, err)
+	}
+
+	//
 	// Validate and parse basic arguments required to create a user and
 	// password that's allowed read+write on all keys and commands
 	//
@@ -212,7 +230,7 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 		LastLogin:    now,
 		Enabled:      true,
 		Rules: []*types.UserACLRule{{
-			Level: types.UserAccessLevel_USER_ACCESS_LEVEL_CLUSTER_ADMIN,
+			Level: types.UserAccessLevel_USER_ACCESS_LEVEL_READ_WRITE,
 		}},
 	}
 
@@ -241,6 +259,9 @@ func validateUsername(u string) error {
 	if strings.HasPrefix(u, "_") {
 		return fmt.Errorf("username starts with a restricted character")
 	}
+	if containsWhitespace(u) {
+		return fmt.Errorf("username cannot contain whitespace")
+	}
 
 	return nil
 }
@@ -252,8 +273,16 @@ func validatePassword(p string) error {
 	if len(p) < 8 {
 		return fmt.Errorf("password is too short")
 	}
+	if containsWhitespace(p) {
+		return fmt.Errorf("password cannot contain whitespace")
+	}
 
 	return nil
+}
+
+func containsWhitespace(s string) bool {
+	whitespace := []byte{'\t', '\n', '\v', '\f', '\r', ' '}
+	return strings.ContainsAny(s, string(whitespace))
 }
 
 func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, error) {

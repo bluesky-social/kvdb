@@ -348,3 +348,17 @@ func cast[T any](item any) (T, error) {
 	var t T
 	return t, fmt.Errorf("failed to cast to %T", t)
 }
+
+func userIsAdmin(user *types.User) bool {
+	if !user.Enabled {
+		return false
+	}
+
+	for _, acl := range user.Rules {
+		if acl.Level == types.UserAccessLevel_USER_ACCESS_LEVEL_CLUSTER_ADMIN {
+			return true
+		}
+	}
+
+	return false
+}
