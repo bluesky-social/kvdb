@@ -11,7 +11,6 @@ import (
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/codes"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -67,9 +66,13 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("failed to parse password argument: %w", err))
 	}
 
-	user, err := s.getUser(ctx, username)
+	user, err := s.getUser(username)
 	if err != nil {
 		return "", recordErr(span, err)
+	}
+	if user == nil {
+		span.SetStatus(codes.Ok, "user not found")
+		return resp.FormatError(errInvalidCredentials), nil
 	}
 
 	if user == nil {
@@ -111,48 +114,6 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 
 	span.SetStatus(codes.Ok, "auth handled")
 	return resp.FormatSimpleString("OK"), nil
-}
-
-func (s *session) getUser(ctx context.Context, username string) (*types.User, error) {
-	ctx, span := s.tracer.Start(ctx, "getUser") // nolint
-	defer span.End()
-
-	userAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		key := s.dirs.user.Pack(tuple.Tuple{username})
-		buf, err := tx.Get(key).Get()
-		if err != nil {
-			return nil, err
-		}
-
-		if len(buf) == 0 {
-			return nil, nil
-		}
-
-		user := &types.User{}
-		err = proto.Unmarshal(buf, user)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal user payload: %w", err)
-		}
-
-		return user, nil
-	})
-	if err != nil {
-		span.RecordError(err)
-		return nil, fmt.Errorf("failed to get user: %w", err)
-	}
-
-	if userAny == nil {
-		return nil, nil // user does not exist
-	}
-
-	user, err := cast[*types.User](userAny)
-	if err != nil {
-		span.RecordError(err)
-		return nil, err
-	}
-
-	span.SetStatus(codes.Ok, "got user")
-	return user, nil
 }
 
 // Implements a small subset of the standard redis functionality for creating a new user.
@@ -228,7 +189,7 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 	// Ensure the user does not already exist
 	//
 
-	existing, err := s.getUser(ctx, username)
+	existing, err := s.getUser(username)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to check if user already exists: %w", err))
 	}
@@ -257,18 +218,8 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 		}},
 	}
 
-	userBuf, err := proto.Marshal(user)
-	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to proto marshal user: %w", err))
-	}
-
-	usernameKey := s.dirs.user.Pack(tuple.Tuple{username})
-	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		tx.Set(usernameKey, userBuf)
-		return nil, nil
-	})
-	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to create user object: %w", err))
+	if err := s.setProtoItem(s.userKey(username), user); err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to save user to database: %w", err))
 	}
 
 	span.SetStatus(codes.Ok, "acl handled")

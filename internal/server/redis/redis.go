@@ -182,6 +182,15 @@ func (s *session) Serve(ctx context.Context) {
 	span.SetStatus(codes.Ok, "session complete")
 }
 
+// Returns the FDB key of an object in the global user directory
+func (s *session) userKey(username string) fdb.Key {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	return s.dirs.user.Pack(tuple.Tuple{username})
+}
+
+// Returns the FDB key of an object in the per-user object directory
 func (s *session) objKey(tup tuple.Tuple) (fdb.Key, error) {
 	s.userMu.RLock()
 	defer s.userMu.RUnlock()
@@ -193,16 +202,17 @@ func (s *session) objKey(tup tuple.Tuple) (fdb.Key, error) {
 	return s.user.objDir.Pack(tup), nil
 }
 
-func (s *session) metaKey(tup tuple.Tuple) (fdb.Key, error) {
-	s.userMu.RLock()
-	defer s.userMu.RUnlock()
+// // Returns the FDB key of an object in the per-user meta directory
+// func (s *session) metaKey(tup tuple.Tuple) (fdb.Key, error) {
+// 	s.userMu.RLock()
+// 	defer s.userMu.RUnlock()
 
-	if s.user == nil {
-		return nil, fmt.Errorf("authentication is required")
-	}
+// 	if s.user == nil {
+// 		return nil, fmt.Errorf("authentication is required")
+// 	}
 
-	return s.user.metaDir.Pack(tup), nil
-}
+// 	return s.user.metaDir.Pack(tup), nil
+// }
 
 func (s *session) write(msg string) {
 	_, err := s.conn.Write([]byte(msg))
@@ -359,6 +369,70 @@ func cast[T any](item any) (T, error) {
 
 	var t T
 	return t, fmt.Errorf("failed to cast to %T", t)
+}
+
+func (s *session) setProtoItem(key fdb.Key, item proto.Message) error {
+	buf, err := proto.Marshal(item)
+	if err != nil {
+		return fmt.Errorf("failed to proto marshal item: %w", err)
+	}
+
+	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		tx.Set(key, buf)
+		return nil, nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to write item to database: %w", err)
+	}
+
+	return nil
+}
+
+func getItem[T any](s *session, key fdb.Key) (T, error) {
+	var item T
+	itemAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		return tx.Get(key).Get()
+	})
+	if err != nil {
+		return item, err
+	}
+
+	if itemAny == nil {
+		return item, nil // item does not exist
+	}
+
+	return cast[T](itemAny)
+}
+
+func (s *session) getProtoItem(key fdb.Key, item proto.Message) (bool, error) {
+	buf, err := getItem[[]byte](s, key)
+	if err != nil {
+		return false, err
+	}
+
+	if len(buf) == 0 {
+		return false, nil // item does not exist
+	}
+
+	if err := proto.Unmarshal(buf, item); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (s *session) getUser(username string) (*types.User, error) {
+	user := &types.User{}
+	exists, err := s.getProtoItem(s.userKey(username), user)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	return user, nil
 }
 
 func userIsAdmin(user *types.User) bool {
