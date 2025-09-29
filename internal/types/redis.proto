@@ -8,7 +8,7 @@ import "google/protobuf/timestamp.proto";
 message User {
   string username = 1;
   bytes password_hash = 2;
-  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp created = 3;
   google.protobuf.Timestamp last_login = 4;
   bool enabled = 5;
   repeated UserACLRule rules = 6;
@@ -23,4 +23,11 @@ enum UserAccessLevel {
   USER_ACCESS_LEVEL_CLUSTER_ADMIN = 1;
   USER_ACCESS_LEVEL_READ_WRITE = 3;
   USER_ACCESS_LEVEL_READ= 4;
+}
+
+message ObjectMeta {
+  google.protobuf.Timestamp created = 1;
+  google.protobuf.Timestamp updated = 2;
+  google.protobuf.Timestamp last_access = 3;
+  uint32 num_chunks = 4;
 }

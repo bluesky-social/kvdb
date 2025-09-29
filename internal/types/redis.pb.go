@@ -78,7 +78,7 @@ type User struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
 	PasswordHash  []byte                 `protobuf:"bytes,2,opt,name=password_hash,json=passwordHash,proto3" json:"password_hash,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Created       *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created,proto3" json:"created,omitempty"`
 	LastLogin     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_login,json=lastLogin,proto3" json:"last_login,omitempty"`
 	Enabled       bool                   `protobuf:"varint,5,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	Rules         []*UserACLRule         `protobuf:"bytes,6,rep,name=rules,proto3" json:"rules,omitempty"`
@@ -130,9 +130,9 @@ func (x *User) GetPasswordHash() []byte {
 	return nil
 }
 
-func (x *User) GetCreatedAt() *timestamppb.Timestamp {
+func (x *User) GetCreated() *timestamppb.Timestamp {
 	if x != nil {
-		return x.CreatedAt
+		return x.Created
 	}
 	return nil
 }
@@ -202,22 +202,97 @@ func (x *UserACLRule) GetLevel() UserAccessLevel {
 	return UserAccessLevel_USER_ACCESS_LEVEL_UNSPECIFIED
 }
 
+type ObjectMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Created       *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=created,proto3" json:"created,omitempty"`
+	Updated       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
+	LastAccess    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_access,json=lastAccess,proto3" json:"last_access,omitempty"`
+	NumChunks     uint32                 `protobuf:"varint,4,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObjectMeta) Reset() {
+	*x = ObjectMeta{}
+	mi := &file_redis_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObjectMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObjectMeta) ProtoMessage() {}
+
+func (x *ObjectMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObjectMeta.ProtoReflect.Descriptor instead.
+func (*ObjectMeta) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ObjectMeta) GetCreated() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Created
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetUpdated() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Updated
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetLastAccess() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastAccess
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetNumChunks() uint32 {
+	if x != nil {
+		return x.NumChunks
+	}
+	return 0
+}
+
 var File_redis_proto protoreflect.FileDescriptor
 
 const file_redis_proto_rawDesc = "" +
 	"\n" +
-	"\vredis.proto\x12\x05types\x1a\x1fgoogle/protobuf/timestamp.proto\"\x81\x02\n" +
+	"\vredis.proto\x12\x05types\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfc\x01\n" +
 	"\x04User\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12#\n" +
-	"\rpassword_hash\x18\x02 \x01(\fR\fpasswordHash\x129\n" +
-	"\n" +
-	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\rpassword_hash\x18\x02 \x01(\fR\fpasswordHash\x124\n" +
+	"\acreated\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x129\n" +
 	"\n" +
 	"last_login\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tlastLogin\x12\x18\n" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\x12(\n" +
 	"\x05rules\x18\x06 \x03(\v2\x12.types.UserACLRuleR\x05rules\";\n" +
 	"\vUserACLRule\x12,\n" +
-	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level*\x97\x01\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xd4\x01\n" +
+	"\n" +
+	"ObjectMeta\x124\n" +
+	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
+	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x12;\n" +
+	"\vlast_access\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastAccess\x12\x1d\n" +
+	"\n" +
+	"num_chunks\x18\x04 \x01(\rR\tnumChunks*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
 	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +
@@ -237,23 +312,27 @@ func file_redis_proto_rawDescGZIP() []byte {
 }
 
 var file_redis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_redis_proto_goTypes = []any{
 	(UserAccessLevel)(0),          // 0: types.UserAccessLevel
 	(*User)(nil),                  // 1: types.User
 	(*UserACLRule)(nil),           // 2: types.UserACLRule
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*ObjectMeta)(nil),            // 3: types.ObjectMeta
+	(*timestamppb.Timestamp)(nil), // 4: google.protobuf.Timestamp
 }
 var file_redis_proto_depIdxs = []int32{
-	3, // 0: types.User.created_at:type_name -> google.protobuf.Timestamp
-	3, // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
+	4, // 0: types.User.created:type_name -> google.protobuf.Timestamp
+	4, // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
 	2, // 2: types.User.rules:type_name -> types.UserACLRule
 	0, // 3: types.UserACLRule.level:type_name -> types.UserAccessLevel
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	4, // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
+	4, // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
+	4, // 6: types.ObjectMeta.last_access:type_name -> google.protobuf.Timestamp
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_redis_proto_init() }
@@ -267,7 +346,7 @@ func file_redis_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_redis_proto_rawDesc), len(file_redis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

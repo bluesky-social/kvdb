@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/codes"
@@ -72,11 +71,6 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 	}
 	if user == nil {
 		span.SetStatus(codes.Ok, "user not found")
-		return resp.FormatError(errInvalidCredentials), nil
-	}
-
-	if user == nil {
-		span.SetStatus(codes.Ok, "invalid username")
 		return resp.FormatError(errInvalidCredentials), nil
 	}
 	if !user.Enabled {
@@ -210,7 +204,7 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 	user := &types.User{
 		Username:     username,
 		PasswordHash: passHash,
-		CreatedAt:    now,
+		Created:      now,
 		LastLogin:    now,
 		Enabled:      true,
 		Rules: []*types.UserACLRule{{
@@ -263,14 +257,31 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 	ctx, span := s.tracer.Start(ctx, "handleGet") // nolint
 	defer span.End()
 
-	val, err := s.redisGet(args)
-	if err != nil {
+	if err := validateNumArgs(args, 1); err != nil {
 		return "", recordErr(span, err)
 	}
 
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", fmt.Errorf("failed to parse argument: %w", err)
+	}
+
+	bufAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		_, buf, err := s.getObject(tx, key)
+		return buf, err
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
+	}
+
+	buf, err := cast[[]byte](bufAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to cast result value: %w", err))
+	}
+
 	res := resp.FormatNil()
-	if len(val) > 0 {
-		res = resp.FormatBulkString(string(val))
+	if len(buf) > 0 {
+		res = resp.FormatBulkString(string(buf))
 	}
 
 	span.SetStatus(codes.Ok, "get handled")
@@ -281,43 +292,33 @@ func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, 
 	ctx, span := s.tracer.Start(ctx, "handleExists") // nolint
 	defer span.End()
 
-	val, err := s.redisGet(args)
-	if err != nil {
+	if err := validateNumArgs(args, 1); err != nil {
 		return "", recordErr(span, err)
 	}
 
-	span.SetStatus(codes.Ok, "exists handled")
-	return resp.FormatBoolAsInt(len(val) > 0), nil
-}
-
-func (s *session) redisGet(args []resp.Value) ([]byte, error) {
-	if err := validateNumArgs(args, 1); err != nil {
-		return nil, err
-	}
-
-	keyStr, err := extractStringArg(args[0])
+	key, err := extractStringArg(args[0])
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse argument: %w", err)
+		return "", fmt.Errorf("failed to parse argument: %w", err)
 	}
 
-	key, err := s.objKey(tuple.Tuple{keyStr})
-	if err != nil {
-		return nil, err
-	}
-
-	valAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		return tx.Get(key).Get()
+	existsAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		_, meta, err := s.getObjectMeta(tx, key)
+		if err != nil {
+			return nil, err
+		}
+		return meta != nil, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get value: %w", err)
+		return "", recordErr(span, fmt.Errorf("failed to check if item exists: %w", err))
 	}
 
-	val, err := cast[[]byte](valAny)
+	exists, err := cast[bool](existsAny)
 	if err != nil {
-		return nil, err
+		return "", recordErr(span, fmt.Errorf("failed to cast result value: %w", err))
 	}
 
-	return val, nil
+	span.SetStatus(codes.Ok, "exists handled")
+	return resp.FormatBoolAsInt(exists), nil
 }
 
 func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, error) {
@@ -328,7 +329,7 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 		return "", recordErr(span, err)
 	}
 
-	keyStr, err := extractStringArg(args[0])
+	key, err := extractStringArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
@@ -338,14 +339,8 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 		return "", recordErr(span, fmt.Errorf("failed to parse value argument: %w", err))
 	}
 
-	key, err := s.objKey(tuple.Tuple{keyStr})
-	if err != nil {
-		return "", recordErr(span, err)
-	}
-
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		tx.Set(key, []byte(val))
-		return nil, nil
+		return nil, s.writeObject(tx, key, []byte(val))
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
@@ -363,24 +358,26 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, err)
 	}
 
-	keyStr, err := extractStringArg(args[0])
+	key, err := extractStringArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
 	}
 
-	key, err := s.objKey(tuple.Tuple{keyStr})
-	if err != nil {
-		return "", recordErr(span, err)
-	}
-
 	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		val, err := tx.Get(key).Get()
+		_, meta, err := s.getObjectMeta(tx, key)
+		if err != nil {
+			return false, err
+		}
+		if meta == nil {
+			return false, nil // object does not exist
+		}
+
+		err = s.deleteObject(tx, key, meta)
 		if err != nil {
 			return false, err
 		}
 
-		tx.Clear(key)
-		return len(val) > 0, nil
+		return true, nil
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to delete value: %w", err))

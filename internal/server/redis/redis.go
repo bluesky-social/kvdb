@@ -87,7 +87,7 @@ func InitAdminUser(db fdb.Database, dirs *Directories, username, password string
 	user := &types.User{
 		Username:     username,
 		PasswordHash: passHash,
-		CreatedAt:    now,
+		Created:      now,
 		LastLogin:    now,
 		Enabled:      true,
 		Rules: []*types.UserACLRule{{
@@ -191,7 +191,7 @@ func (s *session) userKey(username string) fdb.Key {
 }
 
 // Returns the FDB key of an object in the per-user object directory
-func (s *session) objKey(tup tuple.Tuple) (fdb.Key, error) {
+func (s *session) objectKey(id string, offset uint32) (fdb.Key, error) {
 	s.userMu.RLock()
 	defer s.userMu.RUnlock()
 
@@ -199,20 +199,20 @@ func (s *session) objKey(tup tuple.Tuple) (fdb.Key, error) {
 		return nil, fmt.Errorf("authentication is required")
 	}
 
-	return s.user.objDir.Pack(tup), nil
+	return s.user.objDir.Pack(tuple.Tuple{id, int(offset)}), nil
 }
 
-// // Returns the FDB key of an object in the per-user meta directory
-// func (s *session) metaKey(tup tuple.Tuple) (fdb.Key, error) {
-// 	s.userMu.RLock()
-// 	defer s.userMu.RUnlock()
+// Returns the FDB key of an object in the per-user meta directory
+func (s *session) metaKey(id string) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
 
-// 	if s.user == nil {
-// 		return nil, fmt.Errorf("authentication is required")
-// 	}
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
 
-// 	return s.user.metaDir.Pack(tup), nil
-// }
+	return s.user.metaDir.Pack(tuple.Tuple{id}), nil
+}
 
 func (s *session) write(msg string) {
 	_, err := s.conn.Write([]byte(msg))
@@ -447,4 +447,134 @@ func userIsAdmin(user *types.User) bool {
 	}
 
 	return false
+}
+
+// Returns the associated metadata for an object. Returns nil if the object does not exist.
+func (s *session) getObjectMeta(tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+	metaKey, err := s.metaKey(id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
+	}
+
+	metaBuf, err := tx.Get(metaKey).Get()
+	if err != nil {
+		return metaKey, nil, fmt.Errorf("failed to get object meta from database: %w", err)
+	}
+
+	if len(metaBuf) == 0 {
+		return metaKey, nil, nil
+	}
+
+	meta := &types.ObjectMeta{}
+	if err = proto.Unmarshal(metaBuf, meta); err != nil {
+		return metaKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
+	}
+
+	return metaKey, meta, nil
+}
+
+func (s *session) getObject(tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
+	_, meta, err := s.getObjectMeta(tx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if meta == nil {
+		return nil, nil, nil
+	}
+
+	// @TODO (jrc): update last_accessed out of band
+
+	buf := []byte{}
+	for ndx := range meta.NumChunks {
+		chunkKey, err := s.objectKey(id, ndx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get object chunk key: %w", err)
+		}
+
+		chunk, err := tx.Get(chunkKey).Get()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get object chunk: %w", err)
+		}
+
+		buf = append(buf, chunk...)
+	}
+
+	return meta, buf, nil
+}
+
+func (s *session) writeObject(tx fdb.Transaction, id string, data []byte) error {
+	now := timestamppb.Now()
+
+	// check if the object already exists and should be overwritten
+	metaKey, meta, err := s.getObjectMeta(tx, id)
+	if err != nil {
+		return err
+	}
+	if meta != nil {
+		// delete then update existing
+		if err := s.deleteObject(tx, id, meta); err != nil {
+			return err
+		}
+	} else {
+		// create new
+		meta = &types.ObjectMeta{
+			Created: now,
+		}
+	}
+	meta.Updated = now
+	meta.LastAccess = now
+
+	const maxValBytes = 100_000
+	length := uint32(len(data))
+	meta.NumChunks = (length / maxValBytes) + 1
+	if length%maxValBytes == 0 {
+		meta.NumChunks = length / maxValBytes
+	}
+
+	// write the meta object
+	metaBuf, err := proto.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("failed to proto marshal object meta: %w", err)
+	}
+	tx.Set(metaKey, metaBuf)
+
+	// write all object data chunks
+	for ndx := range meta.NumChunks {
+		start := ndx * maxValBytes
+		end := min((ndx+1)*maxValBytes, length)
+
+		chunkKey, err := s.objectKey(id, ndx)
+		if err != nil {
+			return fmt.Errorf("failed to get object chunk key: %w", err)
+		}
+
+		tx.Set(chunkKey, data[start:end])
+	}
+
+	return nil
+}
+
+func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+	// delete the meta object
+	metaKey, err := s.metaKey(id)
+	if err != nil {
+		return fmt.Errorf("failed to get meta key: %w", err)
+	}
+	tx.Clear(metaKey)
+
+	// clear all object chunks
+	begin, err := s.objectKey(id, 0)
+	if err != nil {
+		return fmt.Errorf("failed to get object begin key: %w", err)
+	}
+	end, err := s.objectKey(id, meta.NumChunks-1)
+	if err != nil {
+		return fmt.Errorf("failed to get object start key: %w", err)
+	}
+	tx.ClearRange(fdb.KeyRange{
+		Begin: begin,
+		End:   end,
+	})
+
+	return nil
 }
