@@ -10,7 +10,8 @@ message User {
   bytes password_hash = 2;
   google.protobuf.Timestamp created_at = 3;
   google.protobuf.Timestamp last_login = 4;
-  repeated UserACLRule rules = 5;
+  bool enabled = 5;
+  repeated UserACLRule rules = 6;
 }
 
 message UserACLRule {

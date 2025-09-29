@@ -22,20 +22,25 @@ func testSession(t *testing.T) *session {
 	dirs, err := InitDirectories(db)
 	require.NoError(t, err)
 
-	sess := NewSession(&NewSessionArgs{
+	return NewSession(&NewSessionArgs{
 		Conn: &bytes.Buffer{},
 		FDB:  db,
 		Dirs: dirs,
 	})
+}
 
-	userDir, err := dirs.redis.CreateOrOpen(sess.fdb, []string{testutil.RandString(24)}, nil)
-	require.NoError(t, err)
+func testSessionWithAuth(t *testing.T) *session {
+	sess := testSession(t)
 
-	sess.userMu.Lock()
-	sess.user = &sessionUser{
-		dir: userDir,
-	}
-	sess.userMu.Unlock()
+	// log the user in as admin
+	res := sess.handleCommand(t.Context(), &resp.Command{
+		Name: "AUTH",
+		Args: []resp.Value{
+			resp.SimpleStringValue("admin"),
+			resp.SimpleStringValue("admin"),
+		},
+	})
+	requireNoRESPError(t, res)
 
 	return sess
 }
@@ -51,7 +56,7 @@ func requireNoRESPError(t *testing.T, str string) {
 func TestPing(t *testing.T) {
 	require := require.New(t)
 	ctx := t.Context()
-	sess := testSession(t)
+	sess := testSessionWithAuth(t)
 
 	res := sess.handleCommand(ctx, &resp.Command{
 		Name: "PING",
@@ -72,13 +77,16 @@ func TestPing(t *testing.T) {
 		},
 	})
 	requireRESPError(t, res)
+}
 
+// @TODO (jrc)
+func TestAuth(t *testing.T) {
 }
 
 func TestBasicCRUD(t *testing.T) {
 	require := require.New(t)
 	ctx := t.Context()
-	sess := testSession(t)
+	sess := testSessionWithAuth(t)
 
 	key := testutil.RandString(24)
 	val := testutil.RandString(24)
@@ -187,7 +195,7 @@ func TestIncrDecr(t *testing.T) {
 
 	require := require.New(t)
 	ctx := t.Context()
-	sess := testSession(t)
+	sess := testSessionWithAuth(t)
 
 	key := testutil.RandString(24)
 
@@ -273,7 +281,7 @@ func TestSets(t *testing.T) {
 
 	require := require.New(t)
 	ctx := t.Context()
-	sess := testSession(t)
+	sess := testSessionWithAuth(t)
 
 	set1 := testutil.RandString(24)
 	val1 := testutil.RandString(24)

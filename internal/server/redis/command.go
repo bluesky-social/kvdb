@@ -74,7 +74,10 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 		span.SetStatus(codes.Ok, "invalid username")
 		return resp.FormatError(errInvalidCredentials), nil
 	}
-
+	if !user.Enabled {
+		span.SetStatus(codes.Ok, "user is disabled")
+		return resp.FormatError(errInvalidCredentials), nil
+	}
 	if err := comparePasswords(user.PasswordHash, pass); err != nil {
 		span.SetStatus(codes.Ok, "invalid password")
 		return resp.FormatError(errInvalidCredentials), nil
@@ -117,7 +120,7 @@ func (s *session) getUser(ctx context.Context, username string) (*types.User, er
 			return nil, fmt.Errorf("failed to unmarshal user payload: %w", err)
 		}
 
-		return nil, nil
+		return user, nil
 	})
 	if err != nil {
 		span.RecordError(err)

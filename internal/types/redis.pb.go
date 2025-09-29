@@ -80,7 +80,8 @@ type User struct {
 	PasswordHash  []byte                 `protobuf:"bytes,2,opt,name=password_hash,json=passwordHash,proto3" json:"password_hash,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	LastLogin     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_login,json=lastLogin,proto3" json:"last_login,omitempty"`
-	Rules         []*UserACLRule         `protobuf:"bytes,5,rep,name=rules,proto3" json:"rules,omitempty"`
+	Enabled       bool                   `protobuf:"varint,5,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Rules         []*UserACLRule         `protobuf:"bytes,6,rep,name=rules,proto3" json:"rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -143,6 +144,13 @@ func (x *User) GetLastLogin() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *User) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
 func (x *User) GetRules() []*UserACLRule {
 	if x != nil {
 		return x.Rules
@@ -198,15 +206,16 @@ var File_redis_proto protoreflect.FileDescriptor
 
 const file_redis_proto_rawDesc = "" +
 	"\n" +
-	"\vredis.proto\x12\x05types\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe7\x01\n" +
+	"\vredis.proto\x12\x05types\x1a\x1fgoogle/protobuf/timestamp.proto\"\x81\x02\n" +
 	"\x04User\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12#\n" +
 	"\rpassword_hash\x18\x02 \x01(\fR\fpasswordHash\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"last_login\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tlastLogin\x12(\n" +
-	"\x05rules\x18\x05 \x03(\v2\x12.types.UserACLRuleR\x05rules\";\n" +
+	"last_login\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tlastLogin\x12\x18\n" +
+	"\aenabled\x18\x05 \x01(\bR\aenabled\x12(\n" +
+	"\x05rules\x18\x06 \x03(\v2\x12.types.UserACLRuleR\x05rules\";\n" +
 	"\vUserACLRule\x12,\n" +
 	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
