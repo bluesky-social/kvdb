@@ -493,7 +493,6 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
-
 		if len(buf) == 0 {
 			buf = []byte("0") // create a new value
 		}
@@ -510,22 +509,76 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 
-		return buf, nil
+		return num, nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete value: %w", err)
 	}
 
-	res, err := cast[[]byte](resAny)
+	res, err := cast[int64](resAny)
 	if err != nil {
 		return 0, recordErr(span, err)
 	}
 
-	num, err := strconv.ParseInt(string(res), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse stored value: %w", err)
+	span.SetStatus(codes.Ok, "incr decr handled")
+	return res, nil
+}
+
+func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleIncrByFloat") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
 	}
 
-	span.SetStatus(codes.Ok, "incr decr handled")
-	return num, nil
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
+	}
+
+	byStr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse increment argument: %w", err))
+	}
+
+	by, err := strconv.ParseFloat(byStr, 64)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid increment %q: %w", byStr, err))
+	}
+
+	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		_, buf, err := s.getObject(tx, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get existing value")
+		}
+		if len(buf) == 0 {
+			buf = []byte("0") // create a new value
+		}
+
+		num, err := strconv.ParseFloat(string(buf), 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse stored numeric: %w", err)
+		}
+
+		num += by
+
+		buf = []byte(strconv.FormatFloat(num, 'g', -1, 64))
+		if err = s.writeObject(tx, key, buf); err != nil {
+			return nil, fmt.Errorf("failed to write value to database: %w", err)
+		}
+
+		return buf, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to delete value: %w", err))
+	}
+
+	res, err := cast[[]byte](resAny)
+	if err != nil {
+		return "", recordErr(span, recordErr(span, err))
+	}
+
+	span.SetStatus(codes.Ok, "incrbyfloat handled")
+	return resp.FormatBulkString(string(res)), nil
 }

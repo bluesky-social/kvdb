@@ -296,6 +296,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleIncr(ctx, cmd.Args)
 	case "incrby":
 		res, err = s.handleIncrBy(ctx, cmd.Args)
+	case "incrbyfloat":
+		res, err = s.handleIncrByFloat(ctx, cmd.Args)
 	case "decr":
 		res, err = s.handleDecr(ctx, cmd.Args)
 	case "decrby":

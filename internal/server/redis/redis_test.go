@@ -510,6 +510,33 @@ func TestIncrDecr(t *testing.T) {
 		},
 	})
 	require.Equal(resp.FormatInt(-5), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "INCRBYFLOAT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.BulkStringValue("10.5"),
+		},
+	})
+	require.Equal(resp.FormatBulkString("5.5"), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "INCRBYFLOAT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.BulkStringValue("5.0e3"),
+		},
+	})
+	require.Equal(resp.FormatBulkString("5005.5"), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "INCRBYFLOAT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.BulkStringValue("-10.0e3"),
+		},
+	})
+	require.Equal(resp.FormatBulkString("-4994.5"), res)
 }
 
 // order-independant array comparison
