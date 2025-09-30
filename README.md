@@ -1,5 +1,7 @@
 # KVDB
 
+[![CI](https://github.com/bluesky-social/kvdb/actions/workflows/golang.yml/badge.svg)](https://github.com/bluesky-social/kvdb/actions/workflows/golang.yml)
+
 **NOTE:** This repository is under heavy development and is not suitable for general production use yet. Do not use!
 
 An implementation of a subset of the redis command set backed persistently by FoundationDB.
