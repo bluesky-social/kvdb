@@ -995,6 +995,26 @@ func (s *session) handleSetUnion(ctx context.Context, args []resp.Value) (string
 	return resp, nil
 }
 
+func (s *session) handleSetDiff(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetDiff")
+	defer span.End()
+
+	resp, err := s.handleMultiSetOperation(ctx, args, func(bitmaps []*roaring.Bitmap) *roaring.Bitmap {
+		// diff all bitmaps
+		resultBitmap := bitmaps[0]
+		for _, bitmap := range bitmaps[1:] {
+			resultBitmap.AndNot(bitmap)
+		}
+		return resultBitmap
+	})
+	if err != nil {
+		return "", err
+	}
+
+	span.SetStatus(codes.Ok, "sdiff handled")
+	return resp, nil
+}
+
 type setOperationFunc func([]*roaring.Bitmap) *roaring.Bitmap
 
 func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value, fn setOperationFunc) (string, error) {

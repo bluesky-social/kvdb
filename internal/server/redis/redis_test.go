@@ -817,42 +817,42 @@ func TestSets(t *testing.T) {
 	requireNoRESPError(t, res)
 	requireArraysEqual(t, []string{val2}, res)
 
-	// // invalid arguments
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SDIFF",
-	// 	Args: []resp.Value{},
-	// })
-	// requireRESPError(t, res)
+	// invalid arguments
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SDIFF",
+		Args: []resp.Value{},
+	})
+	requireRESPError(t, res)
 
-	// // diff with one item is just the set
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SDIFF",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set2)},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{val1, val3, val4}, res)
+	// diff with one item is just the set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SDIFF",
+		Args: []resp.Value{resp.SimpleStringValue(set2)},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1, val3, val4}, res)
 
-	// // diff in one direction
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SDIFF",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue(set2),
-	// 	},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{val2}, res)
+	// diff in one direction
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SDIFF",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set2),
+		},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val2}, res)
 
-	// // diff in the other direction
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SDIFF",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set2),
-	// 		resp.SimpleStringValue(set1),
-	// 	},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{val1, val3, val4}, res)
+	// diff in the other direction
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SDIFF",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set2),
+			resp.SimpleStringValue(set1),
+		},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1, val3, val4}, res)
 
 	// delete the whole set and check that it's gone
 	res = sess.handleCommand(ctx, &resp.Command{
