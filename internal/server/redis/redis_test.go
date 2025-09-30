@@ -763,34 +763,33 @@ func TestSets(t *testing.T) {
 	requireNoRESPError(t, res)
 	requireArraysEqual(t, []string{val1}, res)
 
-	// @TODO: fix unions
-	// // union should be all values
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SUNION",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue(set2),
-	// 	},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{val1, val2, val3, val4}, res)
+	// union should be all values
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SUNION",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set2),
+		},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1, val2, val3, val4}, res)
 
-	// // invalid arguments
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SUNION",
-	// 	Args: []resp.Value{},
-	// })
-	// requireRESPError(t, res)
+	// invalid arguments
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SUNION",
+		Args: []resp.Value{},
+	})
+	requireRESPError(t, res)
 
-	// // union of one set is just the set
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SUNION",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set2),
-	// 	},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{val3, val4}, res)
+	// union of one set is just the set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SUNION",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set2),
+		},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1, val3, val4}, res)
 
 	// remove an item from the set and check that it no longer exists
 	res = sess.handleCommand(ctx, &resp.Command{

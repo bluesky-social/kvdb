@@ -341,6 +341,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetMembers(ctx, cmd.Args)
 	case "sinter":
 		res, err = s.handleSetInter(ctx, cmd.Args)
+	case "sunion":
+		res, err = s.handleSetUnion(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)

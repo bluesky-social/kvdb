@@ -955,6 +955,52 @@ func (s *session) handleSetInter(ctx context.Context, args []resp.Value) (string
 	ctx, span := s.tracer.Start(ctx, "handleSetInter")
 	defer span.End()
 
+	resp, err := s.handleMultiSetOperation(ctx, args, func(bitmaps []*roaring.Bitmap) *roaring.Bitmap {
+		// intersect all bitmaps
+		resultBitmap := bitmaps[0]
+		for _, bitmap := range bitmaps[1:] {
+			if bitmap == nil || bitmap.IsEmpty() {
+				// intersection with empty is empty
+				return roaring.New()
+			}
+			resultBitmap.And(bitmap)
+		}
+		return resultBitmap
+	})
+	if err != nil {
+		return "", err
+	}
+
+	span.SetStatus(codes.Ok, "sinter handled")
+	return resp, nil
+}
+
+func (s *session) handleSetUnion(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetUnion")
+	defer span.End()
+
+	resp, err := s.handleMultiSetOperation(ctx, args, func(bitmaps []*roaring.Bitmap) *roaring.Bitmap {
+		// union all bitmaps
+		resultBitmap := bitmaps[0]
+		for _, bitmap := range bitmaps[1:] {
+			resultBitmap.Or(bitmap)
+		}
+		return resultBitmap
+	})
+	if err != nil {
+		return "", err
+	}
+
+	span.SetStatus(codes.Ok, "sunion handled")
+	return resp, nil
+}
+
+type setOperationFunc func([]*roaring.Bitmap) *roaring.Bitmap
+
+func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value, fn setOperationFunc) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleMultiSetOperation")
+	defer span.End()
+
 	if err := validateNumArgs(args, 1); err != nil {
 		return "", recordErr(span, err)
 	}
@@ -1007,15 +1053,8 @@ func (s *session) handleSetInter(ctx context.Context, args []resp.Value) (string
 			return "", recordErr(span, fmt.Errorf("failed to unmarshal bitmaps: %w", err))
 		}
 
-		// intersect all bitmaps
-		resultBitmap := bitmaps[0]
-		for _, bitmap := range bitmaps[1:] {
-			if bitmap == nil || bitmap.IsEmpty() {
-				// intersection with empty set is empty
-				return []string{}, nil
-			}
-			resultBitmap.And(bitmap)
-		}
+		// call the user-provided function to execute some logic on the list of bitmaps
+		resultBitmap := fn(bitmaps)
 
 		// convert UIDs back to members
 		uids := resultBitmap.ToArray()
@@ -1044,6 +1083,6 @@ func (s *session) handleSetInter(ctx context.Context, args []resp.Value) (string
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "sinter handled")
+	span.SetStatus(codes.Ok, "multi-set operation handled")
 	return resp.FormatArrayOfBulkStrings(members), nil
 }
