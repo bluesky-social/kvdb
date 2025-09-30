@@ -557,7 +557,7 @@ func requireArraysEqual(t *testing.T, expected []string, actualResp string) {
 
 	require.Equal(t, len(expected), len(actual))
 
-	// check that ever member exists in the array
+	// check that every member exists in the array
 	for _, exp := range expected {
 		require.Contains(t, actual, exp)
 	}
@@ -633,31 +633,33 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatBoolAsInt(false), res)
 
-	// // check on the size of the set
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SCARD",
-	// 	Args: []resp.Value{resp.SimpleStringValue("invalid")},
-	// })
-	// require.Equal(resp.FormatInt(0), res)
+	// check on the size of the set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SCARD",
+		Args: []resp.Value{resp.SimpleStringValue("invalid")},
+	})
+	require.Equal(resp.FormatInt(0), res)
 
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SCARD",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// require.Equal(resp.FormatInt(1), res)
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SCARD",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	require.Equal(resp.FormatInt(1), res)
 
-	// // check member lists
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SMEMBERS",
-	// 	Args: []resp.Value{resp.SimpleStringValue("invalid")},
-	// })
-	// requireArraysEqual(t, []string{}, res)
+	// check member lists
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue("invalid")},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{}, res)
 
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SMEMBERS",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// requireArraysEqual(t, []string{val1}, res)
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1}, res)
 
 	// add a second member to the set
 	res = sess.handleCommand(ctx, &resp.Command{
@@ -669,12 +671,13 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatInt(1), res)
 
-	// // check its members again
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SMEMBERS",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// requireArraysEqual(t, []string{val1, val2}, res)
+	// check its members again
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1, val2}, res)
 
 	// // invalid arguments
 	// res = sess.handleCommand(ctx, &resp.Command{
@@ -688,6 +691,7 @@ func TestSets(t *testing.T) {
 	// 	Name: "SINTER",
 	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{val1, val2}, res)
 
 	// // intersect a set with itself
@@ -698,6 +702,7 @@ func TestSets(t *testing.T) {
 	// 		resp.SimpleStringValue(set1),
 	// 	},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{val1, val2}, res)
 
 	// // intersect against a set that does not exist
@@ -708,6 +713,7 @@ func TestSets(t *testing.T) {
 	// 		resp.SimpleStringValue("invalid"),
 	// 	},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{}, res)
 
 	set2 := testutil.RandString(24)
@@ -733,6 +739,7 @@ func TestSets(t *testing.T) {
 	// 		resp.SimpleStringValue(set2),
 	// 	},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{}, res)
 
 	// add some overlap between the sets
@@ -753,6 +760,7 @@ func TestSets(t *testing.T) {
 	// 		resp.SimpleStringValue(set2),
 	// 	},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{val1}, res)
 
 	// @TODO: fix unions
@@ -764,6 +772,7 @@ func TestSets(t *testing.T) {
 	// 		resp.SimpleStringValue(set2),
 	// 	},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{val1, val2, val3, val4}, res)
 
 	// // invalid arguments
@@ -780,6 +789,7 @@ func TestSets(t *testing.T) {
 	// 		resp.SimpleStringValue(set2),
 	// 	},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{val3, val4}, res)
 
 	// remove an item from the set and check that it no longer exists
@@ -801,11 +811,12 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatBoolAsInt(false), res)
 
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SMEMBERS",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// requireArraysEqual(t, []string{val2}, res)
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val2}, res)
 
 	// // invalid arguments
 	// res = sess.handleCommand(ctx, &resp.Command{
@@ -819,6 +830,7 @@ func TestSets(t *testing.T) {
 	// 	Name: "SDIFF",
 	// 	Args: []resp.Value{resp.SimpleStringValue(set2)},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{val1, val3, val4}, res)
 
 	// // diff in one direction
@@ -829,6 +841,7 @@ func TestSets(t *testing.T) {
 	// 		resp.SimpleStringValue(set2),
 	// 	},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{val2}, res)
 
 	// // diff in the other direction
@@ -839,6 +852,7 @@ func TestSets(t *testing.T) {
 	// 		resp.SimpleStringValue(set1),
 	// 	},
 	// })
+	// requireNoRESPError(t, res)
 	// requireArraysEqual(t, []string{val1, val3, val4}, res)
 
 	// delete the whole set and check that it's gone
@@ -848,11 +862,12 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatBoolAsInt(true), res)
 
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SMEMBERS",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// requireArraysEqual(t, []string{}, res)
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SMEMBERS",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{}, res)
 
 	// create a new set with one member, then delete that member,
 	// which should blow away the whole set

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -334,6 +335,10 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetRemove(ctx, cmd.Args)
 	case "sismember":
 		res, err = s.handleSetIsMember(ctx, cmd.Args)
+	case "scard":
+		res, err = s.handleSetCard(ctx, cmd.Args)
+	case "smembers":
+		res, err = s.handleSetMembers(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
@@ -402,6 +407,10 @@ func validateNumArgs(args []resp.Value, num int) error {
 func recordErr(span trace.Span, err error) error {
 	span.RecordError(err)
 	return err
+}
+
+func recoverErr(loc string, r any) error {
+	return fmt.Errorf("caught a panic in %s: %v", loc, r)
 }
 
 func cast[T any](item any) (T, error) {
@@ -622,6 +631,183 @@ func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.Object
 	return nil
 }
 
-func recoverErr(loc string, r any) error {
-	return fmt.Errorf("caught a panic in %s: %v", loc, r)
+// Interns, stores, and returns a new UID. The upper 32 bits are a random sequence number, and the lower
+// 32 bits are a sequential number within that space. This allows for up to 4 billion unique IDs per
+// sequence and very low contention when allocating new IDs
+func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "allocateNewUID") // nolint
+	defer span.End()
+
+	// sequenceNum is the random uint32 sequence we are using for this allocation
+	var sequenceNum uint32
+	var sequenceKey fdb.Key
+
+	// assignedUID is the uint32 within the sequence we will assign
+	var assignedUID uint32
+
+	for range 20 {
+		// pick a random uint32 as the sequence we will be using for this member
+		sequenceNum = rand.Uint32()
+
+		var err error
+		sequenceKey, err = s.uidKey(strconv.FormatUint(uint64(sequenceNum), 10))
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to get uid key: %w", err)
+		}
+
+		val, err := tx.Get(sequenceKey).Get()
+		if err != nil {
+			return 0, recordErr(span, fmt.Errorf("failed to get last uid: %w", err))
+		}
+
+		if len(val) == 0 {
+			assignedUID = 1
+		} else {
+			lastUID, err := strconv.ParseUint(string(val), 10, 32)
+			if err != nil {
+				span.RecordError(err)
+				return 0, fmt.Errorf("failed to parse last uid: %w", err)
+			}
+
+			// if we have exhausted this sequence, pick a new random sequence
+			if lastUID >= 0xFFFFFFFF {
+				continue
+			}
+
+			assignedUID = uint32(lastUID) + 1
+		}
+	}
+
+	// if we failed to find a sequence after several tries, return an error
+	if assignedUID == 0 {
+		err := fmt.Errorf("failed to allocate new uid after multiple attempts")
+		span.RecordError(err)
+		return 0, err
+	}
+
+	// assemble the 64-bit UID from the sequence and assigned UID
+	newUID := (uint64(sequenceNum) << 32) | uint64(assignedUID)
+
+	// store the assigned UID back to the sequence key for the next allocation
+	tx.Set(sequenceKey, []byte(strconv.FormatUint(uint64(assignedUID), 10)))
+
+	// return the full 64-bit UID
+	return newUID, nil
+}
+
+// Returns the UID for the given member string, creating a new one if it does not exist
+func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, member string) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "getOrAllocateUID") // nolint
+	defer span.End()
+
+	memberToUIDKey, err := s.reverseUIDKey(member)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get uid key: %w", err)
+	}
+
+	// check if we've already assigned a UID to this member
+	val, err := tx.Get(memberToUIDKey).Get()
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
+	}
+
+	if len(val) == 0 {
+		// allocate a new UID for this member string
+		uid, err := s.allocateNewUID(ctx, tx)
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to allocate new uid: %w", err)
+		}
+
+		uidStr := strconv.FormatUint(uid, 10)
+		uidToMemberKey, err := s.uidKey(uidStr)
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to get uid key: %w", err)
+		}
+
+		// store the bi-directional mapping
+		tx.Set(memberToUIDKey, []byte(uidStr))
+		tx.Set(uidToMemberKey, []byte(member))
+
+		val = []byte(uidStr)
+	}
+
+	uid, err := strconv.ParseUint(string(val), 10, 64)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to parse uid: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "getOrAllocateUID ok")
+	return uid, nil
+}
+
+// Returns the UID for the given member string. It will only look up the UID; it will
+// never create a new one. UIDs start at 1, so 0 is never a valid UID.
+func (s *session) peekUID(ctx context.Context, tx fdb.ReadTransaction, member string) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "peekUID") // nolint
+	defer span.End()
+
+	memberToUIDKey, err := s.reverseUIDKey(member)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get uid key: %w", err)
+	}
+
+	// check if we've already assigned a UID to this member
+	val, err := tx.Get(memberToUIDKey).Get()
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
+	}
+	if len(val) == 0 {
+		val = []byte("0")
+	}
+
+	uid, err := strconv.ParseUint(string(val), 10, 64)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to parse uid: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "peekUID ok")
+	return uid, nil
+}
+
+func (s *session) memberFromUID(ctx context.Context, uid uint64) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "memberFromUID") // nolint
+	defer span.End()
+
+	key, err := s.uidKey(strconv.FormatUint(uid, 10))
+	if err != nil {
+		span.RecordError(err)
+		return "", fmt.Errorf("failed to get uid key: %w", err)
+	}
+
+	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		return tx.Get(key).Get()
+	})
+	if err != nil {
+		span.RecordError(err)
+		return "", recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
+	}
+
+	member, err := cast[[]byte](res)
+	if err != nil {
+		span.RecordError(err)
+		return "", recordErr(span, fmt.Errorf("invalid result type: %T", res))
+	}
+
+	if len(member) == 0 {
+		err := fmt.Errorf("uid %d not found", uid)
+		span.RecordError(err)
+		return "", err
+	}
+
+	span.SetStatus(codes.Ok, "memberFromUID ok")
+	return string(member), nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"strconv"
 	"strings"
 
@@ -598,140 +597,6 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 	return resp.FormatBulkString(string(res)), nil
 }
 
-// Interns, stores, and returns a new UID. The upper 32 bits are a random sequence number, and the lower
-// 32 bits are a sequential number within that space. This allows for up to 4 billion unique IDs per
-// sequence and very low contention when allocating new IDs
-func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint64, error) {
-	ctx, span := s.tracer.Start(ctx, "allocateNewUID") // nolint
-	defer span.End()
-
-	// sequenceNum is the random uint32 sequence we are using for this allocation
-	var sequenceNum uint32
-	var sequenceKey fdb.Key
-
-	// assignedUID is the uint32 within the sequence we will assign
-	var assignedUID uint32
-
-	for range 20 {
-		// pick a random uint32 as the sequence we will be using for this member
-		sequenceNum = rand.Uint32()
-
-		var err error
-		sequenceKey, err = s.uidKey(strconv.FormatUint(uint64(sequenceNum), 10))
-		if err != nil {
-			span.RecordError(err)
-			return 0, fmt.Errorf("failed to get uid key: %w", err)
-		}
-
-		val, err := tx.Get(sequenceKey).Get()
-		if err != nil {
-			return 0, recordErr(span, fmt.Errorf("failed to get last uid: %w", err))
-		}
-
-		if len(val) == 0 {
-			assignedUID = 1
-		} else {
-			lastUID, err := strconv.ParseUint(string(val), 10, 32)
-			if err != nil {
-				span.RecordError(err)
-				return 0, fmt.Errorf("failed to parse last uid: %w", err)
-			}
-
-			// if we have exhausted this sequence, pick a new random sequence
-			if lastUID >= 0xFFFFFFFF {
-				continue
-			}
-
-			assignedUID = uint32(lastUID) + 1
-		}
-	}
-
-	// if we failed to find a sequence after several tries, return an error
-	if assignedUID == 0 {
-		err := fmt.Errorf("failed to allocate new uid after multiple attempts")
-		span.RecordError(err)
-		return 0, err
-	}
-
-	// assemble the 64-bit UID from the sequence and assigned UID
-	newUID := (uint64(sequenceNum) << 32) | uint64(assignedUID)
-
-	// store the assigned UID back to the sequence key for the next allocation
-	tx.Set(sequenceKey, []byte(strconv.FormatUint(uint64(assignedUID), 10)))
-
-	// return the full 64-bit UID
-	return newUID, nil
-}
-
-// Returns the UID for the given member string, creating a new one if it does not exist.
-// If peek is true, it will only look up the UID without creating a new one. If peeking
-// and the member does not exist, it returns 0 without an error. UIDs start at 1, so 0
-// is never a valid UID.
-func (s *session) getUID(ctx context.Context, tx fdb.Transaction, member string, peek bool) (uint64, error) {
-	ctx, span := s.tracer.Start(ctx, "getUID") // nolint
-	defer span.End()
-
-	memberToUIDKey, err := s.reverseUIDKey(member)
-	if err != nil {
-		span.RecordError(err)
-		return 0, fmt.Errorf("failed to get uid key: %w", err)
-	}
-
-	val, err := tx.Get(memberToUIDKey).Get()
-	if err != nil {
-		span.RecordError(err)
-		return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
-	}
-	if peek {
-		// just look up the UID without creating a new one
-		if len(val) == 0 {
-			val = []byte("0")
-		}
-	} else {
-		// check if we've already assigned a UID to this member
-		val, err = tx.Get(memberToUIDKey).Get()
-		if err != nil {
-			span.RecordError(err)
-			return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
-		}
-
-		if len(val) == 0 {
-			// allocate a new UID for this member string
-			uid, err := s.allocateNewUID(ctx, tx)
-			if err != nil {
-				span.RecordError(err)
-				return 0, fmt.Errorf("failed to allocate new uid: %w", err)
-			}
-
-			uidStr := strconv.FormatUint(uid, 10)
-			uidToMemberKey, err := s.uidKey(uidStr)
-			if err != nil {
-				span.RecordError(err)
-				return 0, fmt.Errorf("failed to get uid key: %w", err)
-			}
-
-			// store the bi-directional mapping
-			tx.Set(memberToUIDKey, []byte(uidStr))
-			tx.Set(uidToMemberKey, []byte(member))
-
-			val = []byte(uidStr)
-		}
-	}
-	if err != nil {
-		span.RecordError(err)
-		return 0, fmt.Errorf("failed to get or create uid: %w", err)
-	}
-
-	uid, err := strconv.ParseUint(string(val), 10, 64)
-	if err != nil {
-		span.RecordError(err)
-		return 0, fmt.Errorf("failed to parse uid: %w", err)
-	}
-
-	span.SetStatus(codes.Ok, "getUID ok")
-	return uid, nil
-}
-
 func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleSetAdd")
 	defer span.End()
@@ -764,7 +629,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 				}
 			}()
 
-			return s.getUID(ctx, tx, member, false)
+			return s.getOrAllocateUID(ctx, tx, member)
 		})
 		if err != nil {
 			return nil, recordErr(span, fmt.Errorf("failed to get uids for members: %w", err))
@@ -853,7 +718,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 				}
 			}()
 
-			return s.getUID(ctx, tx, member, true)
+			return s.peekUID(ctx, tx, member)
 		})
 		if err != nil {
 			return nil, recordErr(span, fmt.Errorf("failed to get uids for members: %w", err))
@@ -935,9 +800,9 @@ func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, fmt.Errorf("failed to parse set member argument: %w", err))
 	}
 
-	containsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+	containsAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// lookup the UID for the member
-		memberUID, err := s.getUID(ctx, tx, member, true)
+		memberUID, err := s.peekUID(ctx, tx, member)
 		if err != nil {
 			return false, recordErr(span, fmt.Errorf("failed to get uid for member: %w", err))
 		}
@@ -969,6 +834,104 @@ func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "srem handled")
+	span.SetStatus(codes.Ok, "sismember handled")
 	return resp.FormatBoolAsInt(contains), nil
+}
+
+func (s *session) handleSetCard(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetCard") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 1); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	membersAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		// get the bitmap if it exists
+		_, blob, err := s.getObject(tx, key)
+		if err != nil {
+			return uint64(0), fmt.Errorf("failed to get existing set: %w", err)
+		}
+		if len(blob) == 0 {
+			return uint64(0), nil
+		}
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return uint64(0), fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+		}
+
+		return bitmap.GetCardinality(), nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to check if member is in set: %w", err))
+	}
+
+	members, err := cast[uint64](membersAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "scard handled")
+	return resp.FormatInt(int64(members)), nil
+}
+
+func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetMembers") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 1); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	membersAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		// get the bitmap if it exists
+		_, blob, err := s.getObject(tx, key)
+		if err != nil {
+			return []string{}, fmt.Errorf("failed to get existing set: %w", err)
+		}
+
+		// if the bitmap doesn't exist, the member does not exist in the set
+		if len(blob) == 0 {
+			return []string{}, nil
+		}
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return []string{}, fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+		}
+
+		uids := bitmap.ToArray()
+
+		r := concurrent.New[uint64, string]()
+		members, err := r.Do(ctx, uids, func(uid uint64) (string, error) {
+			return s.memberFromUID(ctx, uid)
+		})
+		if err != nil {
+			return []string{}, fmt.Errorf("failed to get member from uid: %w", err)
+		}
+
+		return members, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to check if member is in set: %w", err))
+	}
+
+	members, err := cast[[]string](membersAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "smembers handled")
+	return resp.FormatArrayOfBulkStrings(members), nil
 }
