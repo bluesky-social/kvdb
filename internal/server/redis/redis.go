@@ -668,23 +668,29 @@ func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id strin
 	return nil
 }
 
-// Interns, stores, and returns a new UID. The upper 32 bits are a random sequence number, and the lower
-// 32 bits are a sequential number within that space. This allows for up to 4 billion unique IDs per
-// sequence and very low contention when allocating new IDs
+// Interns, stores, and returns a new UID. The upper 16 bits are a random sequence number, and the lower
+// 48 bits are a sequential number within that space. This allows for many unique IDs per sequence and
+// very low contention when allocating new IDs.
 func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "allocateNewUID") // nolint
 	defer span.End()
 
-	// sequenceNum is the random uint32 sequence we are using for this allocation
-	var sequenceNum uint32
+	const (
+		uidSequenceIDBitWidth = 16
+		maxSequenceID         = 1 << uidSequenceIDBitWidth
+		maxAssignedUID        = (1 << (64 - uidSequenceIDBitWidth)) - 1
+	)
+
+	// sequenceNum is the random sequence we are using for this allocation
+	var sequenceNum uint64
 	var sequenceKey fdb.Key
 
 	// assignedUID is the uint32 within the sequence we will assign
-	var assignedUID uint32
+	var assignedUID uint64
 
 	for range 20 {
-		// pick a random uint32 as the sequence we will be using for this member
-		sequenceNum = rand.Uint32()
+		// pick a random number as the sequence we will be using for this member
+		sequenceNum = rand.Uint64N(maxSequenceID)
 
 		var err error
 		sequenceKey, err = s.uidKey(strconv.FormatUint(uint64(sequenceNum), 10))
@@ -701,18 +707,18 @@ func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint6
 		if len(val) == 0 {
 			assignedUID = 1
 		} else {
-			lastUID, err := strconv.ParseUint(string(val), 10, 32)
+			lastUID, err := strconv.ParseUint(string(val), 10, 64)
 			if err != nil {
 				span.RecordError(err)
 				return 0, fmt.Errorf("failed to parse last uid: %w", err)
 			}
 
 			// if we have exhausted this sequence, pick a new random sequence
-			if lastUID >= 0xFFFFFFFF {
+			if lastUID >= maxAssignedUID {
 				continue
 			}
 
-			assignedUID = uint32(lastUID) + 1
+			assignedUID = lastUID + 1
 		}
 	}
 
