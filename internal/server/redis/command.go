@@ -951,55 +951,99 @@ func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (stri
 	return resp.FormatArrayOfBulkStrings(members), nil
 }
 
-// func (s *session) handleSetInter(ctx context.Context, args []resp.Value) (string, error) {
-// 	ctx, span := s.tracer.Start(ctx, "handleSetInter")
-// 	defer span.End()
+func (s *session) handleSetInter(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetInter")
+	defer span.End()
 
-// 	if err := validateNumArgs(args, 1); err != nil {
-// 		return "", recordErr(span, err)
-// 	}
+	if err := validateNumArgs(args, 1); err != nil {
+		return "", recordErr(span, err)
+	}
 
-// 	key, err := extractStringArg(args[0])
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
-// 	}
+	var setKeys []string
+	for ndx, arg := range args {
+		setKey, err := extractStringArg(arg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse set key argument at index %d: %w", ndx, err))
+		}
+		setKeys = append(setKeys, setKey)
+	}
 
-// 	var setKeys []string
-// 	for ndx, arg := range args {
-// 		setKey, err := extractStringArg(arg)
-// 		if err != nil {
-// 			return "", recordErr(span, fmt.Errorf("failed to parse set key argument at index %d: %w", ndx, err))
-// 		}
-// 		setKeys = append(setKeys, setKey)
-// 	}
+	membersAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		r := concurrent.New[string, []byte]()
+		blobs, err := r.Do(ctx, setKeys, func(skey string) (blob []byte, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = recoverErr("retreiving members from uids", r)
+				}
+			}()
 
-// 	membersAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-// 		r := concurrent.New[string, []byte]()
-// 		members, err := r.Do(ctx, setKeys, func(skey string) ([]byte, error) {
-// 			defer func() {
-// 				if r := recover(); r != nil {
-// 					err = recoverErr("retreiving members from uids", r)
-// 				}
-// 			}()
+			_, blob, err = s.getObject(ctx, tx, skey)
+			return
+		})
+		if err != nil {
+			return []string{}, fmt.Errorf("failed to get member from uid: %w", err)
+		}
 
-// 			_, blob, err := s.getObject(tx, skey)
-// 			return blob, err
-// 		})
-// 		if err != nil {
-// 			return []string{}, fmt.Errorf("failed to get member from uid: %w", err)
-// 		}
+		// unmarshal all bitmaps
+		r2 := concurrent.New[[]byte, *roaring.Bitmap]()
+		bitmaps, err := r2.Do(ctx, blobs, func(blob []byte) (bitmap *roaring.Bitmap, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = recoverErr("unmarshalling bitmaps", r)
+				}
+			}()
 
-// 		return members, nil
-// 	})
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to check if member is in set: %w", err))
-// 	}
+			bitmap = roaring.New()
+			if len(blob) == 0 {
+				return
+			}
 
-// 	members, err := cast[[]string](membersAny)
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
-// 	}
+			if err := bitmap.UnmarshalBinary(blob); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal bitmap: %w", err)
+			}
+			return
+		})
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to unmarshal bitmaps: %w", err))
+		}
 
-// 	span.SetStatus(codes.Ok, "sinter handled")
-// 	return resp.FormatArrayOfBulkStrings(members), nil
-// }
+		// intersect all bitmaps
+		resultBitmap := bitmaps[0]
+		for _, bitmap := range bitmaps[1:] {
+			if bitmap == nil || bitmap.IsEmpty() {
+				// intersection with empty set is empty
+				return []string{}, nil
+			}
+			resultBitmap.And(bitmap)
+		}
+
+		// convert UIDs back to members
+		uids := resultBitmap.ToArray()
+		r3 := concurrent.New[uint64, string]()
+		members, err := r3.Do(ctx, uids, func(uid uint64) (member string, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = recoverErr("retreiving members from uids", r)
+				}
+			}()
+
+			return s.memberFromUID(ctx, tx, uid)
+		})
+		if err != nil {
+			return nil, recordErr(span, fmt.Errorf("failed to get members for UIDs: %w", err))
+		}
+
+		return members, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to check if member is in set: %w", err))
+	}
+
+	members, err := cast[[]string](membersAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "sinter handled")
+	return resp.FormatArrayOfBulkStrings(members), nil
+}

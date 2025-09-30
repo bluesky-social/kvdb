@@ -679,42 +679,42 @@ func TestSets(t *testing.T) {
 	requireNoRESPError(t, res)
 	requireArraysEqual(t, []string{val1, val2}, res)
 
-	// // invalid arguments
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SINTER",
-	// 	Args: []resp.Value{},
-	// })
-	// requireRESPError(t, res)
+	// invalid arguments
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{},
+	})
+	requireRESPError(t, res)
 
-	// // intersect a set with nothing
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SINTER",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{val1, val2}, res)
+	// intersect a set with nothing
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1, val2}, res)
 
-	// // intersect a set with itself
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SINTER",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue(set1),
-	// 	},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{val1, val2}, res)
+	// intersect a set with itself
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set1),
+		},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1, val2}, res)
 
-	// // intersect against a set that does not exist
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SINTER",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue("invalid"),
-	// 	},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{}, res)
+	// intersect against a set that does not exist
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue("invalid"),
+		},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{}, res)
 
 	set2 := testutil.RandString(24)
 	val3 := testutil.RandString(24)
@@ -731,16 +731,16 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatInt(2), res)
 
-	// // intersection between set1 and set2 should be zero
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SINTER",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue(set2),
-	// 	},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{}, res)
+	// intersection between set1 and set2 should be zero
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set2),
+		},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{}, res)
 
 	// add some overlap between the sets
 	res = sess.handleCommand(ctx, &resp.Command{
@@ -752,16 +752,16 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatInt(1), res)
 
-	// // intersection should now contain one value
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SINTER",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue(set2),
-	// 	},
-	// })
-	// requireNoRESPError(t, res)
-	// requireArraysEqual(t, []string{val1}, res)
+	// intersection should now contain one value
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SINTER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(set2),
+		},
+	})
+	requireNoRESPError(t, res)
+	requireArraysEqual(t, []string{val1}, res)
 
 	// @TODO: fix unions
 	// // union should be all values
