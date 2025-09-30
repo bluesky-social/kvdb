@@ -597,41 +597,41 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatInt(1), res)
 
-	// // invalid arguments
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SISMEMBER",
-	// 	Args: []resp.Value{resp.SimpleStringValue(set1)},
-	// })
-	// requireRESPError(t, res)
+	// invalid arguments
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireRESPError(t, res)
 
-	// // check that val1 is in the set and val2 is not
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SISMEMBER",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue(val1),
-	// 	},
-	// })
-	// require.Equal(resp.FormatBoolAsInt(true), res)
+	// check that val1 is in the set and val2 is not
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(val1),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(true), res)
 
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SISMEMBER",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue(val2),
-	// 	},
-	// })
-	// require.Equal(resp.FormatBoolAsInt(false), res)
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(false), res)
 
-	// // check if an item is in a set that does not exist
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SISMEMBER",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue("invalid"),
-	// 		resp.SimpleStringValue(val2),
-	// 	},
-	// })
-	// require.Equal(resp.FormatBoolAsInt(false), res)
+	// check if an item is in a set that does not exist
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{
+			resp.SimpleStringValue("invalid"),
+			resp.SimpleStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(false), res)
 
 	// // check on the size of the set
 	// res = sess.handleCommand(ctx, &resp.Command{
@@ -792,14 +792,14 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatBoolAsInt(true), res)
 
-	// res = sess.handleCommand(ctx, &resp.Command{
-	// 	Name: "SISMEMBER",
-	// 	Args: []resp.Value{
-	// 		resp.SimpleStringValue(set1),
-	// 		resp.SimpleStringValue(val1),
-	// 	},
-	// })
-	// require.Equal(resp.FormatBoolAsInt(false), res)
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SISMEMBER",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(val1),
+		},
+	})
+	require.Equal(resp.FormatBoolAsInt(false), res)
 
 	// res = sess.handleCommand(ctx, &resp.Command{
 	// 	Name: "SMEMBERS",

@@ -822,7 +822,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 }
 
 func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleSetRemove") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleSetRemove")
 	defer span.End()
 
 	if err := validateNumArgs(args, 2); err != nil {
@@ -905,7 +905,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 		return removed, nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
+		return "", recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
 	}
 
 	removed, err := cast[int64](removedAny)
@@ -915,4 +915,60 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 
 	span.SetStatus(codes.Ok, "srem handled")
 	return resp.FormatInt(removed), nil
+}
+
+func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetIsMember") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	member, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set member argument: %w", err))
+	}
+
+	containsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// lookup the UID for the member
+		memberUID, err := s.getUID(ctx, tx, member, true)
+		if err != nil {
+			return false, recordErr(span, fmt.Errorf("failed to get uid for member: %w", err))
+		}
+
+		// get the bitmap if it exists
+		_, blob, err := s.getObject(tx, key)
+		if err != nil {
+			return false, fmt.Errorf("failed to get existing set: %w", err)
+		}
+
+		// if the bitmap doesn't exist, the member does not exist in the set
+		if len(blob) == 0 {
+			return false, nil
+		}
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return false, fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+		}
+
+		return bitmap.Contains(memberUID), nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to check if member is in set: %w", err))
+	}
+
+	contains, err := cast[bool](containsAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "srem handled")
+	return resp.FormatBoolAsInt(contains), nil
 }

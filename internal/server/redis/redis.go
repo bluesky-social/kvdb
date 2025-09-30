@@ -332,6 +332,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetAdd(ctx, cmd.Args)
 	case "srem":
 		res, err = s.handleSetRemove(ctx, cmd.Args)
+	case "sismember":
+		res, err = s.handleSetIsMember(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
