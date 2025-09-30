@@ -11,8 +11,16 @@ require (
 )
 
 require (
+	github.com/RoaringBitmap/roaring/v2 v2.10.0
 	github.com/apple/foundationdb/bindings/go v0.0.0-20250221231555-5140696da2df
+	github.com/bluesky-social/go-util v0.0.0-20250911184242-2bd2bc840175
 	golang.org/x/crypto v0.41.0
+)
+
+require (
+	github.com/bits-and-blooms/bitset v1.12.0 // indirect
+	github.com/mschoch/smat v0.2.0 // indirect
+	golang.org/x/sync v0.16.0 // indirect
 )
 
 require (

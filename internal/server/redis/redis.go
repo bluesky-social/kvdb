@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,7 +38,7 @@ type Directories struct {
 func InitDirectories(db fdb.Database) (dir *Directories, err error) {
 	dir = &Directories{}
 
-	dir.redis, err = directory.CreateOrOpen(db, []string{"redis"}, nil)
+	dir.redis, err = directory.CreateOrOpen(db, []string{"redis_v0"}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create redis directory: %w", err)
 	}
@@ -138,8 +139,10 @@ type session struct {
 }
 
 type sessionUser struct {
-	objDir  directory.DirectorySubspace
-	metaDir directory.DirectorySubspace
+	objDir        directory.DirectorySubspace
+	metaDir       directory.DirectorySubspace
+	uidDir        directory.DirectorySubspace
+	reverseUIDDir directory.DirectorySubspace
 
 	user *types.User
 }
@@ -212,6 +215,30 @@ func (s *session) metaKey(id string) (fdb.Key, error) {
 	}
 
 	return s.user.metaDir.Pack(tuple.Tuple{id}), nil
+}
+
+// Returns the FDB key of an object in the per-user uid directory
+func (s *session) uidKey(id string) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	return s.user.uidDir.Pack(tuple.Tuple{id}), nil
+}
+
+// Returns the FDB key of an object in the per-user uid directory
+func (s *session) reverseUIDKey(id string) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	return s.user.reverseUIDDir.Pack(tuple.Tuple{id}), nil
 }
 
 func (s *session) write(msg string) {
@@ -302,6 +329,22 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleDecr(ctx, cmd.Args)
 	case "decrby":
 		res, err = s.handleDecrBy(ctx, cmd.Args)
+	case "sadd":
+		res, err = s.handleSetAdd(ctx, cmd.Args)
+	case "srem":
+		res, err = s.handleSetRemove(ctx, cmd.Args)
+	case "sismember":
+		res, err = s.handleSetIsMember(ctx, cmd.Args)
+	case "scard":
+		res, err = s.handleSetCard(ctx, cmd.Args)
+	case "smembers":
+		res, err = s.handleSetMembers(ctx, cmd.Args)
+	case "sinter":
+		res, err = s.handleSetInter(ctx, cmd.Args)
+	case "sunion":
+		res, err = s.handleSetUnion(ctx, cmd.Args)
+	case "sdiff":
+		res, err = s.handleSetDiff(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
@@ -370,6 +413,10 @@ func validateNumArgs(args []resp.Value, num int) error {
 func recordErr(span trace.Span, err error) error {
 	span.RecordError(err)
 	return err
+}
+
+func recoverErr(loc string, r any) error {
+	return fmt.Errorf("caught a panic in %s: %v", loc, r)
 }
 
 func cast[T any](item any) (T, error) {
@@ -460,69 +507,91 @@ func userIsAdmin(user *types.User) bool {
 }
 
 // Returns the associated metadata for an object. Returns nil if the object does not exist.
-func (s *session) getObjectMeta(tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+func (s *session) getObjectMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+	ctx, span := s.tracer.Start(ctx, "getObjectMeta") // nolint
+	defer span.End()
+
 	metaKey, err := s.metaKey(id)
 	if err != nil {
+		span.RecordError(err)
 		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
 	}
 
 	metaBuf, err := tx.Get(metaKey).Get()
 	if err != nil {
+		span.RecordError(err)
 		return metaKey, nil, fmt.Errorf("failed to get object meta from database: %w", err)
 	}
 
 	if len(metaBuf) == 0 {
+		span.SetStatus(codes.Ok, "getObject ok")
 		return metaKey, nil, nil
 	}
 
 	meta := &types.ObjectMeta{}
 	if err = proto.Unmarshal(metaBuf, meta); err != nil {
+		span.RecordError(err)
 		return metaKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
 	}
 
+	span.SetStatus(codes.Ok, "getObjectMeta ok")
 	return metaKey, meta, nil
 }
 
-func (s *session) getObject(tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
-	_, meta, err := s.getObjectMeta(tx, id)
+func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
+	ctx, span := s.tracer.Start(ctx, "getObject")
+	defer span.End()
+
+	_, meta, err := s.getObjectMeta(ctx, tx, id)
 	if err != nil {
+		span.RecordError(err)
 		return nil, nil, err
 	}
 	if meta == nil {
+		span.SetStatus(codes.Ok, "getObject ok")
 		return nil, nil, nil
 	}
 
 	// @TODO (jrc): update last_accessed out of band
+	// @TODO (jrc): read all chunks in parallel
 
 	buf := []byte{}
 	for ndx := range meta.NumChunks {
 		chunkKey, err := s.objectKey(id, ndx)
 		if err != nil {
+			span.RecordError(err)
 			return nil, nil, fmt.Errorf("failed to get object chunk key: %w", err)
 		}
 
 		chunk, err := tx.Get(chunkKey).Get()
 		if err != nil {
+			span.RecordError(err)
 			return nil, nil, fmt.Errorf("failed to get object chunk: %w", err)
 		}
 
 		buf = append(buf, chunk...)
 	}
 
+	span.SetStatus(codes.Ok, "getObject ok")
 	return meta, buf, nil
 }
 
-func (s *session) writeObject(tx fdb.Transaction, id string, data []byte) error {
+func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
+	ctx, span := s.tracer.Start(ctx, "writeObject")
+	defer span.End()
+
 	now := timestamppb.Now()
 
 	// check if the object already exists and should be overwritten
-	metaKey, meta, err := s.getObjectMeta(tx, id)
+	metaKey, meta, err := s.getObjectMeta(ctx, tx, id)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 	if meta != nil {
 		// delete then update existing
-		if err := s.deleteObject(tx, id, meta); err != nil {
+		if err := s.deleteObject(ctx, tx, id, meta); err != nil {
+			span.RecordError(err)
 			return err
 		}
 	} else {
@@ -544,6 +613,7 @@ func (s *session) writeObject(tx fdb.Transaction, id string, data []byte) error 
 	// write the meta object
 	metaBuf, err := proto.Marshal(meta)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to proto marshal object meta: %w", err)
 	}
 	tx.Set(metaKey, metaBuf)
@@ -555,19 +625,25 @@ func (s *session) writeObject(tx fdb.Transaction, id string, data []byte) error 
 
 		chunkKey, err := s.objectKey(id, ndx)
 		if err != nil {
+			span.RecordError(err)
 			return fmt.Errorf("failed to get object chunk key: %w", err)
 		}
 
 		tx.Set(chunkKey, data[start:end])
 	}
 
+	span.SetStatus(codes.Ok, "writeObject ok")
 	return nil
 }
 
-func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+	ctx, span := s.tracer.Start(ctx, "deleteObject") // nolint
+	defer span.End()
+
 	// delete the meta object
 	metaKey, err := s.metaKey(id)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to get meta key: %w", err)
 	}
 	tx.Clear(metaKey)
@@ -575,10 +651,12 @@ func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.Object
 	// clear all object chunks
 	begin, err := s.objectKey(id, 0)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to get object begin key: %w", err)
 	}
 	end, err := s.objectKey(id, meta.NumChunks-1)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to get object start key: %w", err)
 	}
 	tx.ClearRange(fdb.KeyRange{
@@ -586,5 +664,179 @@ func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.Object
 		End:   end,
 	})
 
+	span.SetStatus(codes.Ok, "deleteObject ok")
 	return nil
+}
+
+// Interns, stores, and returns a new UID. The upper 32 bits are a random sequence number, and the lower
+// 32 bits are a sequential number within that space. This allows for up to 4 billion unique IDs per
+// sequence and very low contention when allocating new IDs
+func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "allocateNewUID") // nolint
+	defer span.End()
+
+	// sequenceNum is the random uint32 sequence we are using for this allocation
+	var sequenceNum uint32
+	var sequenceKey fdb.Key
+
+	// assignedUID is the uint32 within the sequence we will assign
+	var assignedUID uint32
+
+	for range 20 {
+		// pick a random uint32 as the sequence we will be using for this member
+		sequenceNum = rand.Uint32()
+
+		var err error
+		sequenceKey, err = s.uidKey(strconv.FormatUint(uint64(sequenceNum), 10))
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to get uid key: %w", err)
+		}
+
+		val, err := tx.Get(sequenceKey).Get()
+		if err != nil {
+			return 0, recordErr(span, fmt.Errorf("failed to get last uid: %w", err))
+		}
+
+		if len(val) == 0 {
+			assignedUID = 1
+		} else {
+			lastUID, err := strconv.ParseUint(string(val), 10, 32)
+			if err != nil {
+				span.RecordError(err)
+				return 0, fmt.Errorf("failed to parse last uid: %w", err)
+			}
+
+			// if we have exhausted this sequence, pick a new random sequence
+			if lastUID >= 0xFFFFFFFF {
+				continue
+			}
+
+			assignedUID = uint32(lastUID) + 1
+		}
+	}
+
+	// if we failed to find a sequence after several tries, return an error
+	if assignedUID == 0 {
+		err := fmt.Errorf("failed to allocate new uid after multiple attempts")
+		span.RecordError(err)
+		return 0, err
+	}
+
+	// assemble the 64-bit UID from the sequence and assigned UID
+	newUID := (uint64(sequenceNum) << 32) | uint64(assignedUID)
+
+	// store the assigned UID back to the sequence key for the next allocation
+	tx.Set(sequenceKey, []byte(strconv.FormatUint(uint64(assignedUID), 10)))
+
+	// return the full 64-bit UID
+	return newUID, nil
+}
+
+// Returns the UID for the given member string, creating a new one if it does not exist
+func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, member string) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "getOrAllocateUID")
+	defer span.End()
+
+	memberToUIDKey, err := s.reverseUIDKey(member)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get uid key: %w", err)
+	}
+
+	// check if we've already assigned a UID to this member
+	val, err := tx.Get(memberToUIDKey).Get()
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
+	}
+
+	if len(val) == 0 {
+		// allocate a new UID for this member string
+		uid, err := s.allocateNewUID(ctx, tx)
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to allocate new uid: %w", err)
+		}
+
+		uidStr := strconv.FormatUint(uid, 10)
+		uidToMemberKey, err := s.uidKey(uidStr)
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to get uid key: %w", err)
+		}
+
+		// store the bi-directional mapping
+		tx.Set(memberToUIDKey, []byte(uidStr))
+		tx.Set(uidToMemberKey, []byte(member))
+
+		val = []byte(uidStr)
+	}
+
+	uid, err := strconv.ParseUint(string(val), 10, 64)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to parse uid: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "getOrAllocateUID ok")
+	return uid, nil
+}
+
+// Returns the UID for the given member string. It will only look up the UID; it will
+// never create a new one. UIDs start at 1, so 0 is never a valid UID.
+func (s *session) peekUID(ctx context.Context, tx fdb.ReadTransaction, member string) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "peekUID") // nolint
+	defer span.End()
+
+	memberToUIDKey, err := s.reverseUIDKey(member)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get uid key: %w", err)
+	}
+
+	// check if we've already assigned a UID to this member
+	val, err := tx.Get(memberToUIDKey).Get()
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
+	}
+	if len(val) == 0 {
+		val = []byte("0")
+	}
+
+	uid, err := strconv.ParseUint(string(val), 10, 64)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to parse uid: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "peekUID ok")
+	return uid, nil
+}
+
+func (s *session) memberFromUID(ctx context.Context, tx fdb.ReadTransaction, uid uint64) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "memberFromUID") // nolint
+	defer span.End()
+
+	key, err := s.uidKey(strconv.FormatUint(uid, 10))
+	if err != nil {
+		span.RecordError(err)
+		return "", fmt.Errorf("failed to get uid key: %w", err)
+	}
+
+	member, err := tx.Get(key).Get()
+	if err != nil {
+		span.RecordError(err)
+		return "", fmt.Errorf("failed to get member for UID %d: %w", uid, err)
+	}
+
+	if len(member) == 0 {
+		err := fmt.Errorf("uid %d not found", uid)
+		span.RecordError(err)
+		return "", err
+	}
+
+	span.SetStatus(codes.Ok, "memberFromUID ok")
+	return string(member), nil
 }

@@ -58,9 +58,9 @@ FoundationDB provides strictly serializable transactions atop an ordered key-val
 
 |Path|Description|
 |-|-|
-|`redis/*`|All data related to the redis implementation atop foundationdb (if we implement other wire protocols in the future, we will also give them their own directory)|
-|`redis/_admin_user_initialized`|Whether or not an admin user has been created on the cluster via the CLI and env vars|
-|`redis/_user/<username>`|The directory of user protobuf objects, stored by username|
-|`redis/<user_id>/*`|Data for an individual redis user|
-|`redis/<user_id>/meta/<obj_id>`|Metadata protobuf object for bookkeeping of stored object blobs|
-|`redis/<user_id>/obj/<obj_id>`|Storage of data objects|
+|`redis_v0/*`|All data related to the redis implementation atop foundationdb (if we implement other wire protocols in the future, we will also give them their own directory)|
+|`redis_v0/_admin_user_initialized`|Whether or not an admin user has been created on the cluster via the CLI and env vars|
+|`redis_v0/_user/<username>`|The directory of user protobuf objects, stored by username|
+|`redis_v0/<user_id>/*`|Data for an individual redis user|
+|`redis_v0/<user_id>/meta/<obj_id>`|Metadata protobuf object for bookkeeping of stored object blobs|
+|`redis_v0/<user_id>/obj/<obj_id>`|Storage of data objects|
