@@ -778,7 +778,7 @@ func (s *session) peekUID(ctx context.Context, tx fdb.ReadTransaction, member st
 	return uid, nil
 }
 
-func (s *session) memberFromUID(ctx context.Context, uid uint64) (string, error) {
+func (s *session) memberFromUID(ctx context.Context, tx fdb.ReadTransaction, uid uint64) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "memberFromUID") // nolint
 	defer span.End()
 
@@ -788,18 +788,10 @@ func (s *session) memberFromUID(ctx context.Context, uid uint64) (string, error)
 		return "", fmt.Errorf("failed to get uid key: %w", err)
 	}
 
-	res, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		return tx.Get(key).Get()
-	})
+	member, err := tx.Get(key).Get()
 	if err != nil {
 		span.RecordError(err)
 		return "", recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
-	}
-
-	member, err := cast[[]byte](res)
-	if err != nil {
-		span.RecordError(err)
-		return "", recordErr(span, fmt.Errorf("invalid result type: %T", res))
 	}
 
 	if len(member) == 0 {

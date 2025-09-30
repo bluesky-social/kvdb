@@ -800,42 +800,50 @@ func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, fmt.Errorf("failed to parse set member argument: %w", err))
 	}
 
-	containsAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+	type result struct {
+		memberUID uint64
+		blob      []byte
+	}
+
+	resAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// lookup the UID for the member
 		memberUID, err := s.peekUID(ctx, tx, member)
 		if err != nil {
-			return false, recordErr(span, fmt.Errorf("failed to get uid for member: %w", err))
+			return nil, recordErr(span, fmt.Errorf("failed to get uid for member: %w", err))
 		}
 
 		// get the bitmap if it exists
 		_, blob, err := s.getObject(tx, key)
 		if err != nil {
-			return false, fmt.Errorf("failed to get existing set: %w", err)
+			return nil, fmt.Errorf("failed to get existing set: %w", err)
 		}
 
-		// if the bitmap doesn't exist, the member does not exist in the set
-		if len(blob) == 0 {
-			return false, nil
-		}
-
-		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(blob); err != nil {
-			return false, fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
-		}
-
-		return bitmap.Contains(memberUID), nil
+		return &result{
+			memberUID: memberUID,
+			blob:      blob,
+		}, nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to check if member is in set: %w", err))
+		return "", recordErr(span, fmt.Errorf("failed to get set from the database: %w", err))
 	}
 
-	contains, err := cast[bool](containsAny)
+	res, err := cast[*result](resAny)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
+	isMember := false
+	if len(res.blob) > 0 {
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(res.blob); err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to unmarshal existing bitmap: %w", err))
+		}
+
+		isMember = bitmap.Contains(res.memberUID)
+	}
+
 	span.SetStatus(codes.Ok, "sismember handled")
-	return resp.FormatBoolAsInt(contains), nil
+	return resp.FormatBoolAsInt(isMember), nil
 }
 
 func (s *session) handleSetCard(ctx context.Context, args []resp.Value) (string, error) {
@@ -851,34 +859,35 @@ func (s *session) handleSetCard(ctx context.Context, args []resp.Value) (string,
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
 
-	membersAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+	blobAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the bitmap if it exists
 		_, blob, err := s.getObject(tx, key)
 		if err != nil {
 			return uint64(0), fmt.Errorf("failed to get existing set: %w", err)
 		}
-		if len(blob) == 0 {
-			return uint64(0), nil
-		}
-
-		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(blob); err != nil {
-			return uint64(0), fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
-		}
-
-		return bitmap.GetCardinality(), nil
+		return blob, nil
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to check if member is in set: %w", err))
 	}
 
-	members, err := cast[uint64](membersAny)
+	blob, err := cast[[]byte](blobAny)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
+	cardinality := int64(0)
+	if len(blob) > 0 {
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to unmarshal existing bitmap: %w", err))
+		}
+
+		cardinality = int64(bitmap.GetCardinality())
+	}
+
 	span.SetStatus(codes.Ok, "scard handled")
-	return resp.FormatInt(int64(members)), nil
+	return resp.FormatInt(cardinality), nil
 }
 
 func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (string, error) {
@@ -915,7 +924,13 @@ func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (stri
 
 		r := concurrent.New[uint64, string]()
 		members, err := r.Do(ctx, uids, func(uid uint64) (string, error) {
-			return s.memberFromUID(ctx, uid)
+			defer func() {
+				if r := recover(); r != nil {
+					err = recoverErr("retreiving members from uids", r)
+				}
+			}()
+
+			return s.memberFromUID(ctx, tx, uid)
 		})
 		if err != nil {
 			return []string{}, fmt.Errorf("failed to get member from uid: %w", err)
