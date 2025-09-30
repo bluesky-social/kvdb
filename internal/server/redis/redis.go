@@ -138,8 +138,10 @@ type session struct {
 }
 
 type sessionUser struct {
-	objDir  directory.DirectorySubspace
-	metaDir directory.DirectorySubspace
+	objDir        directory.DirectorySubspace
+	metaDir       directory.DirectorySubspace
+	uidDir        directory.DirectorySubspace
+	reverseUIDDir directory.DirectorySubspace
 
 	user *types.User
 }
@@ -212,6 +214,30 @@ func (s *session) metaKey(id string) (fdb.Key, error) {
 	}
 
 	return s.user.metaDir.Pack(tuple.Tuple{id}), nil
+}
+
+// Returns the FDB key of an object in the per-user uid directory
+func (s *session) uidKey(id string) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	return s.user.uidDir.Pack(tuple.Tuple{id}), nil
+}
+
+// Returns the FDB key of an object in the per-user uid directory
+func (s *session) reverseUIDKey(id string) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	return s.user.reverseUIDDir.Pack(tuple.Tuple{id}), nil
 }
 
 func (s *session) write(msg string) {
@@ -302,6 +328,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleDecr(ctx, cmd.Args)
 	case "decrby":
 		res, err = s.handleDecrBy(ctx, cmd.Args)
+	case "sadd":
+		res, err = s.handleSetAdd(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
@@ -493,6 +521,7 @@ func (s *session) getObject(tx fdb.ReadTransaction, id string) (*types.ObjectMet
 	}
 
 	// @TODO (jrc): update last_accessed out of band
+	// @TODO (jrc): read all chunks in parallel
 
 	buf := []byte{}
 	for ndx := range meta.NumChunks {

@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 
+	roaring "github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/bluesky-social/go-util/pkg/concurrent"
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/codes"
@@ -99,11 +102,23 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("failed to initialize user meta directory: %w", err))
 	}
 
+	uidDir, err := userDir.CreateOrOpen(s.fdb, []string{"uid"}, nil)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to initialize user uid directory: %w", err))
+	}
+
+	reverseUIDDir, err := userDir.CreateOrOpen(s.fdb, []string{"ruid"}, nil)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to initialize user reverse uid directory: %w", err))
+	}
+
 	s.userMu.Lock()
 	s.user = &sessionUser{
-		objDir:  objDir,
-		metaDir: metaDir,
-		user:    user,
+		objDir:        objDir,
+		metaDir:       metaDir,
+		uidDir:        uidDir,
+		reverseUIDDir: reverseUIDDir,
+		user:          user,
 	}
 	s.userMu.Unlock()
 
@@ -581,4 +596,221 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 
 	span.SetStatus(codes.Ok, "incrbyfloat handled")
 	return resp.FormatBulkString(string(res)), nil
+}
+
+// Interns, stores, and returns a new UID. The upper 32 bits are a random sequence number, and the lower
+// 32 bits are a sequential number within that space. This allows for up to 4 billion unique IDs per
+// sequence and very low contention when allocating new IDs
+func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "allocateNewUID") // nolint
+	defer span.End()
+
+	// sequenceNum is the random uint32 sequence we are using for this allocation
+	var sequenceNum uint32
+	var sequenceKey fdb.Key
+
+	// assignedUID is the uint32 within the sequence we will assign
+	var assignedUID uint32
+
+	for range 20 {
+		// pick a random uint32 as the sequence we will be using for this member
+		sequenceNum = rand.Uint32()
+
+		var err error
+		sequenceKey, err = s.uidKey(strconv.FormatUint(uint64(sequenceNum), 10))
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to get uid key: %w", err)
+		}
+
+		val, err := tx.Get(sequenceKey).Get()
+		if err != nil {
+			return 0, recordErr(span, fmt.Errorf("failed to get last uid: %w", err))
+		}
+
+		if len(val) == 0 {
+			assignedUID = 1
+		} else {
+			lastUID, err := strconv.ParseUint(string(val), 10, 32)
+			if err != nil {
+				span.RecordError(err)
+				return 0, fmt.Errorf("failed to parse last uid: %w", err)
+			}
+
+			// if we have exhausted this sequence, pick a new random sequence
+			if lastUID >= 0xFFFFFFFF {
+				continue
+			}
+
+			assignedUID = uint32(lastUID) + 1
+		}
+	}
+
+	// if we failed to find a sequence after several tries, return an error
+	if assignedUID == 0 {
+		err := fmt.Errorf("failed to allocate new uid after multiple attempts")
+		span.RecordError(err)
+		return 0, err
+	}
+
+	// assemble the 64-bit UID from the sequence and assigned UID
+	newUID := (uint64(sequenceNum) << 32) | uint64(assignedUID)
+
+	// store the assigned UID back to the sequence key for the next allocation
+	tx.Set(sequenceKey, []byte(strconv.FormatUint(uint64(assignedUID), 10)))
+
+	// return the full 64-bit UID
+	return newUID, nil
+}
+
+// Returns the UID for the given member string, creating a new one if it does not exist.
+// If peek is true, it will only look up the UID without creating a new one. If peeking
+// and the member does not exist, it returns 0 without an error. UIDs start at 1, so 0
+// is never a valid UID.
+func (s *session) getUID(ctx context.Context, tx fdb.Transaction, member string, peek bool) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "getUID") // nolint
+	defer span.End()
+
+	memberToUIDKey, err := s.reverseUIDKey(member)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get uid key: %w", err)
+	}
+
+	var val []byte
+	if peek {
+		// just look up the UID without creating a new one
+		val, err := tx.Get(memberToUIDKey).Get()
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
+		}
+		if len(val) == 0 {
+			val = []byte("0")
+		}
+	} else {
+		// check if we've already assigned a UID to this member
+		val, err = tx.Get(memberToUIDKey).Get()
+		if err != nil {
+			span.RecordError(err)
+			return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
+		}
+
+		if len(val) == 0 {
+			// allocate a new UID for this member string
+			uid, err := s.allocateNewUID(ctx, tx)
+			if err != nil {
+				span.RecordError(err)
+				return 0, fmt.Errorf("failed to allocate new uid: %w", err)
+			}
+
+			uidStr := strconv.FormatUint(uid, 10)
+			uidToMemberKey, err := s.uidKey(uidStr)
+			if err != nil {
+				span.RecordError(err)
+				return 0, fmt.Errorf("failed to get uid key: %w", err)
+			}
+
+			// store the bi-directional mapping
+			tx.Set(memberToUIDKey, []byte(uidStr))
+			tx.Set(uidToMemberKey, []byte(member))
+
+			val = []byte(uidStr)
+		}
+	}
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get or create uid: %w", err)
+	}
+
+	uid, err := strconv.ParseUint(string(val), 10, 64)
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to parse uid: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "getUID ok")
+	return uid, nil
+}
+
+func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetAdd")
+	defer span.End()
+
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	setName, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	members := make([]string, 0, len(args)-1)
+	for ndx, arg := range args[1:] {
+		member, err := extractStringArg(arg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse member argument at index %d: %w", ndx, err))
+		}
+		members = append(members, member)
+	}
+
+	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// allocate a new UID for each member
+		r := concurrent.New[string, uint64]()
+		uids, err := r.Do(ctx, members, func(member string) (uint64, error) {
+			return s.getUID(ctx, tx, member, false)
+		})
+		if err != nil {
+			return nil, recordErr(span, fmt.Errorf("failed to get uids for members: %w", err))
+		}
+
+		// get the bitmap if it exists
+		_, blob, err := s.getObject(tx, setName)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get existing set: %w", err)
+		}
+
+		// if the key doesn't exist, create a new bitmap
+		bitmap := roaring.New()
+		if len(blob) > 0 {
+			bitmap = roaring.New()
+			if err := bitmap.UnmarshalBinary(blob); err != nil {
+				return 0, fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+			}
+		}
+
+		// diff against the existing map to determine how many members are new
+		numNew := int64(0)
+		for _, uid := range uids {
+			if !bitmap.Contains(uid) {
+				numNew += 1
+			}
+		}
+
+		// add the new UIDs to the bitmap
+		bitmap.AddMany(uids)
+
+		// serialize and store the updated bitmap as a large object
+		data, err := bitmap.MarshalBinary()
+		if err != nil {
+			return 0, fmt.Errorf("failed to marshal bitmap: %w", err)
+		}
+
+		if err = s.writeObject(tx, setName, data); err != nil {
+			return 0, fmt.Errorf("failed to write set: %w", err)
+		}
+
+		return numNew, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
+	}
+
+	added, err := cast[int64](res)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	return resp.FormatInt(added), nil
 }
