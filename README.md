@@ -1,6 +1,6 @@
 # KVDB
 
-[![CI](https://github.com/bluesky-social/kvdb/actions/workflows/ci.yml/badge.svg)](https://github.com/bluesky-social/kvdb/actions/workflows/ci.yml)
+[![ci](https://github.com/bluesky-social/kvdb/actions/workflows/ci.yaml/badge.svg)](https://github.com/bluesky-social/kvdb/actions/workflows/ci.yaml)
 
 **NOTE:** This repository is under heavy development and is not suitable for general production use yet. Do not use!
 
