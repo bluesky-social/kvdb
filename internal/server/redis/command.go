@@ -677,14 +677,13 @@ func (s *session) getUID(ctx context.Context, tx fdb.Transaction, member string,
 		return 0, fmt.Errorf("failed to get uid key: %w", err)
 	}
 
-	var val []byte
+	val, err := tx.Get(memberToUIDKey).Get()
+	if err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
+	}
 	if peek {
 		// just look up the UID without creating a new one
-		val, err := tx.Get(memberToUIDKey).Get()
-		if err != nil {
-			span.RecordError(err)
-			return 0, fmt.Errorf("failed to get member to uid mapping: %w", err)
-		}
 		if len(val) == 0 {
 			val = []byte("0")
 		}
@@ -741,7 +740,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, err)
 	}
 
-	setName, err := extractStringArg(args[0])
+	key, err := extractStringArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
@@ -755,10 +754,16 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 		members = append(members, member)
 	}
 
-	res, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// allocate a new UID for each member
 		r := concurrent.New[string, uint64]()
-		uids, err := r.Do(ctx, members, func(member string) (uint64, error) {
+		uids, err := r.Do(ctx, members, func(member string) (n uint64, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = recoverErr("assigning new uids", r)
+				}
+			}()
+
 			return s.getUID(ctx, tx, member, false)
 		})
 		if err != nil {
@@ -766,9 +771,9 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 		}
 
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(tx, setName)
+		_, blob, err := s.getObject(tx, key)
 		if err != nil {
-			return 0, fmt.Errorf("failed to get existing set: %w", err)
+			return int64(0), fmt.Errorf("failed to get existing set: %w", err)
 		}
 
 		// if the key doesn't exist, create a new bitmap
@@ -776,41 +781,138 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 		if len(blob) > 0 {
 			bitmap = roaring.New()
 			if err := bitmap.UnmarshalBinary(blob); err != nil {
-				return 0, fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+				return int64(0), fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
 			}
 		}
 
 		// diff against the existing map to determine how many members are new
-		numNew := int64(0)
+		added := int64(0)
 		for _, uid := range uids {
 			if !bitmap.Contains(uid) {
-				numNew += 1
+				added += 1
 			}
 		}
 
 		// add the new UIDs to the bitmap
 		bitmap.AddMany(uids)
 
-		// serialize and store the updated bitmap as a large object
+		// serialize and store the updated bitmap
 		data, err := bitmap.MarshalBinary()
 		if err != nil {
-			return 0, fmt.Errorf("failed to marshal bitmap: %w", err)
+			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
 
-		if err = s.writeObject(tx, setName, data); err != nil {
-			return 0, fmt.Errorf("failed to write set: %w", err)
+		if err = s.writeObject(tx, key, data); err != nil {
+			return int64(0), fmt.Errorf("failed to write set: %w", err)
 		}
 
-		return numNew, nil
+		return added, nil
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
 	}
 
-	added, err := cast[int64](res)
+	added, err := cast[int64](addedAny)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
+	span.SetStatus(codes.Ok, "sadd handled")
 	return resp.FormatInt(added), nil
+}
+
+func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleSetRemove") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	members := make([]string, 0, len(args)-1)
+	for _, arg := range args[1:] {
+		member, err := extractStringArg(arg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse member argument: %w", err))
+		}
+		members = append(members, member)
+	}
+
+	removedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// lookup the UID for each member
+		r := concurrent.New[string, uint64]()
+		uids, err := r.Do(ctx, members, func(member string) (n uint64, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = recoverErr("looking up uids", r)
+				}
+			}()
+
+			return s.getUID(ctx, tx, member, true)
+		})
+		if err != nil {
+			return nil, recordErr(span, fmt.Errorf("failed to get uids for members: %w", err))
+		}
+
+		// get the bitmap if it exists
+		objMeta, blob, err := s.getObject(tx, key)
+		if err != nil {
+			return int64(0), fmt.Errorf("failed to get existing set: %w", err)
+		}
+
+		// if the bitmap doesn't exist, there's nothing to remove
+		if len(blob) == 0 {
+			return int64(0), nil
+		}
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return int64(0), fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+		}
+
+		// remove from the bitmap and count
+		removed := int64(0)
+		for _, uid := range uids {
+			if bitmap.Contains(uid) {
+				bitmap.Remove(uid)
+				removed++
+			}
+		}
+
+		// if the set is now empty, delete the object
+		if bitmap.IsEmpty() {
+			if err := s.deleteObject(tx, key, objMeta); err != nil {
+				return int64(0), fmt.Errorf("failed to delete object: %w", err)
+			}
+			return removed, nil
+		}
+
+		// serialize and store the updated bitmap
+		data, err := bitmap.MarshalBinary()
+		if err != nil {
+			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
+		}
+
+		if err = s.writeObject(tx, key, data); err != nil {
+			return int64(0), fmt.Errorf("failed to write set: %w", err)
+		}
+
+		return removed, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
+	}
+
+	removed, err := cast[int64](removedAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "srem handled")
+	return resp.FormatInt(removed), nil
 }

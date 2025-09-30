@@ -37,7 +37,7 @@ type Directories struct {
 func InitDirectories(db fdb.Database) (dir *Directories, err error) {
 	dir = &Directories{}
 
-	dir.redis, err = directory.CreateOrOpen(db, []string{"redis"}, nil)
+	dir.redis, err = directory.CreateOrOpen(db, []string{"redis_v0"}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create redis directory: %w", err)
 	}
@@ -330,6 +330,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleDecrBy(ctx, cmd.Args)
 	case "sadd":
 		res, err = s.handleSetAdd(ctx, cmd.Args)
+	case "srem":
+		res, err = s.handleSetRemove(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
@@ -616,4 +618,8 @@ func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.Object
 	})
 
 	return nil
+}
+
+func recoverErr(loc string, r any) error {
+	return fmt.Errorf("caught a panic in %s: %v", loc, r)
 }
