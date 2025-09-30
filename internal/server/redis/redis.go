@@ -339,6 +339,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetCard(ctx, cmd.Args)
 	case "smembers":
 		res, err = s.handleSetMembers(ctx, cmd.Args)
+	// case "sinter":
+	// 	res, err = s.handleSetInter(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
@@ -501,35 +503,48 @@ func userIsAdmin(user *types.User) bool {
 }
 
 // Returns the associated metadata for an object. Returns nil if the object does not exist.
-func (s *session) getObjectMeta(tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+func (s *session) getObjectMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+	ctx, span := s.tracer.Start(ctx, "getObjectMeta") // nolint
+	defer span.End()
+
 	metaKey, err := s.metaKey(id)
 	if err != nil {
+		span.RecordError(err)
 		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
 	}
 
 	metaBuf, err := tx.Get(metaKey).Get()
 	if err != nil {
+		span.RecordError(err)
 		return metaKey, nil, fmt.Errorf("failed to get object meta from database: %w", err)
 	}
 
 	if len(metaBuf) == 0 {
+		span.SetStatus(codes.Ok, "getObject ok")
 		return metaKey, nil, nil
 	}
 
 	meta := &types.ObjectMeta{}
 	if err = proto.Unmarshal(metaBuf, meta); err != nil {
+		span.RecordError(err)
 		return metaKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
 	}
 
+	span.SetStatus(codes.Ok, "getObjectMeta ok")
 	return metaKey, meta, nil
 }
 
-func (s *session) getObject(tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
-	_, meta, err := s.getObjectMeta(tx, id)
+func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
+	ctx, span := s.tracer.Start(ctx, "getObject")
+	defer span.End()
+
+	_, meta, err := s.getObjectMeta(ctx, tx, id)
 	if err != nil {
+		span.RecordError(err)
 		return nil, nil, err
 	}
 	if meta == nil {
+		span.SetStatus(codes.Ok, "getObject ok")
 		return nil, nil, nil
 	}
 
@@ -540,31 +555,39 @@ func (s *session) getObject(tx fdb.ReadTransaction, id string) (*types.ObjectMet
 	for ndx := range meta.NumChunks {
 		chunkKey, err := s.objectKey(id, ndx)
 		if err != nil {
+			span.RecordError(err)
 			return nil, nil, fmt.Errorf("failed to get object chunk key: %w", err)
 		}
 
 		chunk, err := tx.Get(chunkKey).Get()
 		if err != nil {
+			span.RecordError(err)
 			return nil, nil, fmt.Errorf("failed to get object chunk: %w", err)
 		}
 
 		buf = append(buf, chunk...)
 	}
 
+	span.SetStatus(codes.Ok, "getObject ok")
 	return meta, buf, nil
 }
 
-func (s *session) writeObject(tx fdb.Transaction, id string, data []byte) error {
+func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
+	ctx, span := s.tracer.Start(ctx, "writeObject")
+	defer span.End()
+
 	now := timestamppb.Now()
 
 	// check if the object already exists and should be overwritten
-	metaKey, meta, err := s.getObjectMeta(tx, id)
+	metaKey, meta, err := s.getObjectMeta(ctx, tx, id)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 	if meta != nil {
 		// delete then update existing
-		if err := s.deleteObject(tx, id, meta); err != nil {
+		if err := s.deleteObject(ctx, tx, id, meta); err != nil {
+			span.RecordError(err)
 			return err
 		}
 	} else {
@@ -586,6 +609,7 @@ func (s *session) writeObject(tx fdb.Transaction, id string, data []byte) error 
 	// write the meta object
 	metaBuf, err := proto.Marshal(meta)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to proto marshal object meta: %w", err)
 	}
 	tx.Set(metaKey, metaBuf)
@@ -597,19 +621,25 @@ func (s *session) writeObject(tx fdb.Transaction, id string, data []byte) error 
 
 		chunkKey, err := s.objectKey(id, ndx)
 		if err != nil {
+			span.RecordError(err)
 			return fmt.Errorf("failed to get object chunk key: %w", err)
 		}
 
 		tx.Set(chunkKey, data[start:end])
 	}
 
+	span.SetStatus(codes.Ok, "writeObject ok")
 	return nil
 }
 
-func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+	ctx, span := s.tracer.Start(ctx, "deleteObject") // nolint
+	defer span.End()
+
 	// delete the meta object
 	metaKey, err := s.metaKey(id)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to get meta key: %w", err)
 	}
 	tx.Clear(metaKey)
@@ -617,10 +647,12 @@ func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.Object
 	// clear all object chunks
 	begin, err := s.objectKey(id, 0)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to get object begin key: %w", err)
 	}
 	end, err := s.objectKey(id, meta.NumChunks-1)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to get object start key: %w", err)
 	}
 	tx.ClearRange(fdb.KeyRange{
@@ -628,6 +660,7 @@ func (s *session) deleteObject(tx fdb.Transaction, id string, meta *types.Object
 		End:   end,
 	})
 
+	span.SetStatus(codes.Ok, "deleteObject ok")
 	return nil
 }
 
@@ -698,7 +731,7 @@ func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint6
 
 // Returns the UID for the given member string, creating a new one if it does not exist
 func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, member string) (uint64, error) {
-	ctx, span := s.tracer.Start(ctx, "getOrAllocateUID") // nolint
+	ctx, span := s.tracer.Start(ctx, "getOrAllocateUID")
 	defer span.End()
 
 	memberToUIDKey, err := s.reverseUIDKey(member)
@@ -791,7 +824,7 @@ func (s *session) memberFromUID(ctx context.Context, tx fdb.ReadTransaction, uid
 	member, err := tx.Get(key).Get()
 	if err != nil {
 		span.RecordError(err)
-		return "", recordErr(span, fmt.Errorf("failed to get member for UID %d: %w", uid, err))
+		return "", fmt.Errorf("failed to get member for UID %d: %w", uid, err)
 	}
 
 	if len(member) == 0 {

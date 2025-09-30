@@ -269,7 +269,7 @@ func containsWhitespace(s string) bool {
 }
 
 func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleGet") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleGet")
 	defer span.End()
 
 	if err := validateNumArgs(args, 1); err != nil {
@@ -282,7 +282,7 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	bufAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		_, buf, err := s.getObject(tx, key)
+		_, buf, err := s.getObject(ctx, tx, key)
 		return buf, err
 	})
 	if err != nil {
@@ -304,7 +304,7 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 }
 
 func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleExists") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleExists")
 	defer span.End()
 
 	if err := validateNumArgs(args, 1); err != nil {
@@ -317,7 +317,7 @@ func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	existsAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		_, meta, err := s.getObjectMeta(tx, key)
+		_, meta, err := s.getObjectMeta(ctx, tx, key)
 		if err != nil {
 			return nil, err
 		}
@@ -337,7 +337,7 @@ func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, 
 }
 
 func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleSet") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleSet")
 	defer span.End()
 
 	if err := validateNumArgs(args, 2); err != nil {
@@ -355,7 +355,7 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		return nil, s.writeObject(tx, key, []byte(val))
+		return nil, s.writeObject(ctx, tx, key, []byte(val))
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
@@ -366,7 +366,7 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 }
 
 func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleDelete") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleDelete")
 	defer span.End()
 
 	if err := validateNumArgs(args, 1); err != nil {
@@ -379,7 +379,7 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, meta, err := s.getObjectMeta(tx, key)
+		_, meta, err := s.getObjectMeta(ctx, tx, key)
 		if err != nil {
 			return false, err
 		}
@@ -387,7 +387,7 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 			return false, nil // object does not exist
 		}
 
-		err = s.deleteObject(tx, key, meta)
+		err = s.deleteObject(ctx, tx, key, meta)
 		if err != nil {
 			return false, err
 		}
@@ -485,7 +485,7 @@ func (s *session) handleDecrBy(ctx context.Context, args []resp.Value) (string, 
 }
 
 func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr string) (int64, error) {
-	ctx, span := s.tracer.Start(ctx, "handleIncrDecr") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleIncrDecr")
 	defer span.End()
 
 	if err := validateNumArgs(args, 1); err != nil {
@@ -503,7 +503,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 	}
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, buf, err := s.getObject(tx, key)
+		_, buf, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
@@ -519,7 +519,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 		num += by
 
 		buf = []byte(strconv.FormatInt(num, 10))
-		if err = s.writeObject(tx, key, buf); err != nil {
+		if err = s.writeObject(ctx, tx, key, buf); err != nil {
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 
@@ -539,7 +539,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 }
 
 func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleIncrByFloat") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleIncrByFloat")
 	defer span.End()
 
 	if err := validateNumArgs(args, 2); err != nil {
@@ -562,7 +562,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 	}
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, buf, err := s.getObject(tx, key)
+		_, buf, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
@@ -578,7 +578,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 		num += by
 
 		buf = []byte(strconv.FormatFloat(num, 'g', -1, 64))
-		if err = s.writeObject(tx, key, buf); err != nil {
+		if err = s.writeObject(ctx, tx, key, buf); err != nil {
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 
@@ -636,7 +636,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 		}
 
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(tx, key)
+		_, blob, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -667,7 +667,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
 
-		if err = s.writeObject(tx, key, data); err != nil {
+		if err = s.writeObject(ctx, tx, key, data); err != nil {
 			return int64(0), fmt.Errorf("failed to write set: %w", err)
 		}
 
@@ -725,7 +725,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 		}
 
 		// get the bitmap if it exists
-		objMeta, blob, err := s.getObject(tx, key)
+		objMeta, blob, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -751,7 +751,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 
 		// if the set is now empty, delete the object
 		if bitmap.IsEmpty() {
-			if err := s.deleteObject(tx, key, objMeta); err != nil {
+			if err := s.deleteObject(ctx, tx, key, objMeta); err != nil {
 				return int64(0), fmt.Errorf("failed to delete object: %w", err)
 			}
 			return removed, nil
@@ -763,7 +763,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
 
-		if err = s.writeObject(tx, key, data); err != nil {
+		if err = s.writeObject(ctx, tx, key, data); err != nil {
 			return int64(0), fmt.Errorf("failed to write set: %w", err)
 		}
 
@@ -783,7 +783,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 }
 
 func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleSetIsMember") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleSetIsMember")
 	defer span.End()
 
 	if err := validateNumArgs(args, 2); err != nil {
@@ -813,7 +813,7 @@ func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (str
 		}
 
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(tx, key)
+		_, blob, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -847,7 +847,7 @@ func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (str
 }
 
 func (s *session) handleSetCard(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleSetCard") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleSetCard")
 	defer span.End()
 
 	if err := validateNumArgs(args, 1); err != nil {
@@ -861,7 +861,7 @@ func (s *session) handleSetCard(ctx context.Context, args []resp.Value) (string,
 
 	blobAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(tx, key)
+		_, blob, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return uint64(0), fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -891,7 +891,7 @@ func (s *session) handleSetCard(ctx context.Context, args []resp.Value) (string,
 }
 
 func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (string, error) {
-	ctx, span := s.tracer.Start(ctx, "handleSetMembers") // nolint
+	ctx, span := s.tracer.Start(ctx, "handleSetMembers")
 	defer span.End()
 
 	if err := validateNumArgs(args, 1); err != nil {
@@ -905,7 +905,7 @@ func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (stri
 
 	membersAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(tx, key)
+		_, blob, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return []string{}, fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -950,3 +950,56 @@ func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (stri
 	span.SetStatus(codes.Ok, "smembers handled")
 	return resp.FormatArrayOfBulkStrings(members), nil
 }
+
+// func (s *session) handleSetInter(ctx context.Context, args []resp.Value) (string, error) {
+// 	ctx, span := s.tracer.Start(ctx, "handleSetInter")
+// 	defer span.End()
+
+// 	if err := validateNumArgs(args, 1); err != nil {
+// 		return "", recordErr(span, err)
+// 	}
+
+// 	key, err := extractStringArg(args[0])
+// 	if err != nil {
+// 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+// 	}
+
+// 	var setKeys []string
+// 	for ndx, arg := range args {
+// 		setKey, err := extractStringArg(arg)
+// 		if err != nil {
+// 			return "", recordErr(span, fmt.Errorf("failed to parse set key argument at index %d: %w", ndx, err))
+// 		}
+// 		setKeys = append(setKeys, setKey)
+// 	}
+
+// 	membersAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+// 		r := concurrent.New[string, []byte]()
+// 		members, err := r.Do(ctx, setKeys, func(skey string) ([]byte, error) {
+// 			defer func() {
+// 				if r := recover(); r != nil {
+// 					err = recoverErr("retreiving members from uids", r)
+// 				}
+// 			}()
+
+// 			_, blob, err := s.getObject(tx, skey)
+// 			return blob, err
+// 		})
+// 		if err != nil {
+// 			return []string{}, fmt.Errorf("failed to get member from uid: %w", err)
+// 		}
+
+// 		return members, nil
+// 	})
+// 	if err != nil {
+// 		return "", recordErr(span, fmt.Errorf("failed to check if member is in set: %w", err))
+// 	}
+
+// 	members, err := cast[[]string](membersAny)
+// 	if err != nil {
+// 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+// 	}
+
+// 	span.SetStatus(codes.Ok, "sinter handled")
+// 	return resp.FormatArrayOfBulkStrings(members), nil
+// }
