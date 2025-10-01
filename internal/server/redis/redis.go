@@ -410,6 +410,11 @@ func validateNumArgs(args []resp.Value, num int) error {
 	return nil
 }
 
+func containsWhitespace(s string) bool {
+	whitespace := []byte{'\t', '\n', '\v', '\f', '\r', ' '}
+	return strings.ContainsAny(s, string(whitespace))
+}
+
 func recordErr(span trace.Span, err error) error {
 	span.RecordError(err)
 	return err
