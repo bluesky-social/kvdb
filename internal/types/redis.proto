@@ -30,4 +30,5 @@ message ObjectMeta {
   google.protobuf.Timestamp updated = 2;
   google.protobuf.Timestamp last_access = 3;
   uint32 num_chunks = 4;
+  uint64 size_bytes = 5;
 }

@@ -605,8 +605,10 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 			Created: now,
 		}
 	}
+
 	meta.Updated = now
 	meta.LastAccess = now
+	meta.SizeBytes = uint64(len(data))
 
 	const maxValBytes = 100_000
 	length := uint32(len(data))

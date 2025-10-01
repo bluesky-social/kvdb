@@ -208,6 +208,7 @@ type ObjectMeta struct {
 	Updated       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
 	LastAccess    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_access,json=lastAccess,proto3" json:"last_access,omitempty"`
 	NumChunks     uint32                 `protobuf:"varint,4,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
+	SizeBytes     uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -270,6 +271,13 @@ func (x *ObjectMeta) GetNumChunks() uint32 {
 	return 0
 }
 
+func (x *ObjectMeta) GetSizeBytes() uint64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
 var File_redis_proto protoreflect.FileDescriptor
 
 const file_redis_proto_rawDesc = "" +
@@ -284,7 +292,7 @@ const file_redis_proto_rawDesc = "" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\x12(\n" +
 	"\x05rules\x18\x06 \x03(\v2\x12.types.UserACLRuleR\x05rules\";\n" +
 	"\vUserACLRule\x12,\n" +
-	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xd4\x01\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xf3\x01\n" +
 	"\n" +
 	"ObjectMeta\x124\n" +
 	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
@@ -292,7 +300,9 @@ const file_redis_proto_rawDesc = "" +
 	"\vlast_access\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"lastAccess\x12\x1d\n" +
 	"\n" +
-	"num_chunks\x18\x04 \x01(\rR\tnumChunks*\x97\x01\n" +
+	"num_chunks\x18\x04 \x01(\rR\tnumChunks\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
 	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +
