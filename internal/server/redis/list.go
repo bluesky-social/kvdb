@@ -53,6 +53,93 @@ func (s *session) handleLLen(ctx context.Context, args []resp.Value) (string, er
 	return resp.FormatUint(num), nil
 }
 
+func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleLIndex")
+	defer span.End()
+
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
+	}
+
+	indexStr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list index argument: %w", err))
+	}
+	index, err := strconv.ParseInt(indexStr, 10, 64)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list index argument: %w", err))
+	}
+
+	bufAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		_, listMeta, err := s.getListMeta(ctx, tx, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get list meta: %w", err)
+		}
+
+		if listMeta == nil {
+			return nil, nil
+		}
+
+		// @TODO (jrc): update last_accessed out of band
+
+		targetNdx := index
+		if targetNdx < 0 {
+			// wrap around if negative (using addition because targetNdx is already negative)
+			targetNdx = int64(listMeta.NumItems) + targetNdx
+		}
+
+		objKey := listMeta.ItemHead
+		for targetNdx > 0 && objKey != "" {
+			objMetaKey, err := s.listObjMetaKey(key, objKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get list object meta: %w", err)
+			}
+
+			listObjMeta := &types.ListObjectMeta{}
+			ok, err := s.getProtoItem(objMetaKey, listObjMeta)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get list object meta: %w", err)
+			}
+			if !ok {
+				return nil, fmt.Errorf("list object meta not found")
+			}
+
+			targetNdx -= 1
+			objKey = listObjMeta.Next
+		}
+
+		_, buf, err := s.getObject(ctx, tx, objKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get object payload: %w", err)
+		}
+		if len(buf) == 0 {
+			return nil, nil
+		}
+		return buf, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
+	}
+
+	if bufAny == nil {
+		span.SetStatus(codes.Ok, "lindex handled")
+		return resp.FormatNil(), nil
+	}
+
+	buf, err := cast[[]byte](bufAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	span.SetStatus(codes.Ok, "lindex handled")
+	return resp.FormatBulkString(string(buf)), nil
+}
+
 func (s *session) handleLPush(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleLPush")
 	defer span.End()
@@ -117,9 +204,53 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 
 			listMeta.NumItems += 1
 			if left {
+				// assign back pointers if a previous list head exists
+				headKey, err := s.listObjMetaKey(key, listMeta.ItemHead)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get list head key: %w", err)
+				}
+
+				head := &types.ListObjectMeta{}
+				exists, err := s.getProtoItem(headKey, head)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get list head: %w", err)
+				}
+				if exists {
+					head.Previous = objID
+					if err := s.setProtoItem(headKey, head); err != nil {
+						return nil, fmt.Errorf("failed to set list head: %w", err)
+					}
+				} else {
+					// we're creating a new list, so assign both the head and tail
+					listMeta.ItemTail = objID
+				}
+
+				// assign forwards pointers
 				objMeta.Next = listMeta.ItemHead
 				listMeta.ItemHead = objID
 			} else {
+				// assign forwards pointers if a previous list tail exists
+				tailKey, err := s.listObjMetaKey(key, listMeta.ItemTail)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get list tail key: %w", err)
+				}
+
+				tail := &types.ListObjectMeta{}
+				exists, err := s.getProtoItem(tailKey, tail)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get list tail: %w", err)
+				}
+				if exists {
+					tail.Next = objID
+					if err := s.setProtoItem(tailKey, tail); err != nil {
+						return nil, fmt.Errorf("failed to set list tail: %w", err)
+					}
+				} else {
+					// we're creating a new list, so assign both the head and tail
+					listMeta.ItemHead = objID
+				}
+
+				// assign back pointers
 				objMeta.Previous = listMeta.ItemTail
 				listMeta.ItemTail = objID
 			}

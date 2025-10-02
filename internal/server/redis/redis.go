@@ -380,8 +380,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleLPush(ctx, cmd.Args)
 	case "rpush":
 		res, err = s.handleRPush(ctx, cmd.Args)
-	// case "lindex":
-	// 	res, err = s.handleLIndex(ctx, cmd.Args)
+	case "lindex":
+		res, err = s.handleLIndex(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)

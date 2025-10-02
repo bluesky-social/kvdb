@@ -314,7 +314,7 @@ func TestBasicCRUD(t *testing.T) {
 	sess := testSessionWithAuth(t)
 
 	key := testutil.RandString(24)
-	val := testutil.RandString(24)
+	val := "val"
 
 	{
 		// test operations on a key that does not yet exist
@@ -569,8 +569,8 @@ func TestSets(t *testing.T) {
 	sess := testSessionWithAuth(t)
 
 	set1 := testutil.RandString(24)
-	val1 := testutil.RandString(24)
-	val2 := testutil.RandString(24)
+	val1 := "val1"
+	val2 := "val2"
 
 	{
 		// invalid arguments
@@ -717,8 +717,8 @@ func TestSets(t *testing.T) {
 	requireArraysEqual(t, []string{}, res)
 
 	set2 := testutil.RandString(24)
-	val3 := testutil.RandString(24)
-	val4 := testutil.RandString(24)
+	val3 := "val3"
+	val4 := "val4"
 
 	// create a second set with multiple keys at once
 	res = sess.handleCommand(ctx, &resp.Command{
@@ -897,10 +897,11 @@ func TestLists(t *testing.T) {
 	sess := testSessionWithAuth(t)
 
 	list := testutil.RandString(24)
-	val1 := testutil.RandString(24)
-	val2 := testutil.RandString(24)
-	val3 := testutil.RandString(24)
-	val4 := testutil.RandString(24)
+	val0 := "val0"
+	val1 := "val1"
+	val2 := "val2"
+	val3 := "val3"
+	val4 := "val4"
 
 	// invalid args
 	res := sess.handleCommand(ctx, &resp.Command{
@@ -924,7 +925,7 @@ func TestLists(t *testing.T) {
 		Name: "LPUSH",
 		Args: []resp.Value{
 			resp.SimpleStringValue(list),
-			resp.SimpleStringValue(val1),
+			resp.SimpleStringValue(val2),
 		},
 	})
 	require.Equal(resp.FormatInt(1), res)
@@ -934,7 +935,7 @@ func TestLists(t *testing.T) {
 		Args: []resp.Value{
 			resp.SimpleStringValue(list),
 			resp.SimpleStringValue(val1),
-			resp.SimpleStringValue(val2),
+			resp.SimpleStringValue(val0),
 		},
 	})
 	require.Equal(resp.FormatInt(2), res)
@@ -960,4 +961,82 @@ func TestLists(t *testing.T) {
 		Args: []resp.Value{resp.SimpleStringValue(list)},
 	})
 	require.Equal(resp.FormatInt(5), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{resp.SimpleStringValue(list)},
+	})
+	requireRESPError(t, res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue("0"),
+		},
+	})
+	require.Equal(resp.FormatBulkString(val0), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue("1"),
+		},
+	})
+	require.Equal(resp.FormatBulkString(val1), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue("2"),
+		},
+	})
+	require.Equal(resp.FormatBulkString(val2), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue("3"),
+		},
+	})
+	require.Equal(resp.FormatBulkString(val3), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue("4"),
+		},
+	})
+	require.Equal(resp.FormatBulkString(val4), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue("5"),
+		},
+	})
+	require.Equal(resp.FormatNil(), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue("-1"),
+		},
+	})
+	require.Equal(resp.FormatBulkString(val4), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LINDEX",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue("-2"),
+		},
+	})
+	require.Equal(resp.FormatBulkString(val3), res)
 }
