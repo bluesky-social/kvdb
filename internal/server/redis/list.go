@@ -88,17 +88,25 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		metaKey, listMeta, err := s.getListMeta(ctx, tx, key)
+		metaKey, objMeta, err := s.getObjectMeta(ctx, tx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get list meta: %w", err)
 		}
 
 		now := timestamppb.Now()
-		if listMeta == nil {
+		if objMeta == nil {
 			// create a new list
-			listMeta = &types.ListMeta{
+			objMeta = &types.ObjectMeta{
 				Created: now,
+				Type: &types.ObjectMeta_List{
+					List: &types.ListMeta{},
+				},
 			}
+		}
+
+		listMeta, ok := objMeta.Type.(*types.ObjectMeta_List)
+		if !ok {
+			return nil, fmt.Errorf("object is not a list")
 		}
 
 		// create each item meta object and store the blob itself
@@ -109,16 +117,18 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 			}
 			objID := strconv.FormatUint(objIDInt, 10)
 
-			objMeta := &types.ListObjectMeta{
+			listObjMeta := &types.ObjectMeta{
 				Created: now,
 				Updated: now,
-				Id:      objID,
+				Type: &types.ObjectMeta_ListItem{
+					ListItem: &types.ListItemMeta{},
+				},
 			}
 
-			listMeta.NumItems += 1
+			listMeta.List.NumItems += 1
 			if left {
 				// assign back pointers if a previous list head exists
-				headKey, err := s.listObjMetaKey(key, listMeta.ItemHead)
+				headKey, err := s.listObjMetaKey(key, listMeta.List.ItemHead.ItemHead)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get list head key: %w", err)
 				}
@@ -139,7 +149,7 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 				}
 
 				// assign forwards pointers
-				objMeta.Next = listMeta.ItemHead
+				listObjMeta.Next = listMeta.ItemHead
 				listMeta.ItemHead = objID
 			} else {
 				// assign forwards pointers if a previous list tail exists
@@ -164,7 +174,7 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 				}
 
 				// assign back pointers
-				objMeta.Previous = listMeta.ItemTail
+				listObjMeta.Previous = listMeta.ItemTail
 				listMeta.ItemTail = objID
 			}
 
@@ -173,7 +183,7 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 				return nil, fmt.Errorf("failed to get list object meta key: %w", err)
 			}
 
-			if err := s.setProtoItem(objMetaKey, objMeta); err != nil {
+			if err := s.setProtoItem(objMetaKey, listObjMeta); err != nil {
 				return nil, fmt.Errorf("failed to write list object meta: %w", err)
 			}
 

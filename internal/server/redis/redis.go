@@ -580,8 +580,8 @@ func (s *session) getObjectMeta(ctx context.Context, tx fdb.ReadTransaction, id 
 	return metaKey, meta, nil
 }
 
-func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
-	ctx, span := s.tracer.Start(ctx, "getObject")
+func (s *session) getBasicObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
+	ctx, span := s.tracer.Start(ctx, "getBasicObject")
 	defer span.End()
 
 	_, meta, err := s.getObjectMeta(ctx, tx, id)
@@ -594,11 +594,18 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id stri
 		return nil, nil, nil
 	}
 
+	basicObjMeta, ok := meta.Type.(*types.ObjectMeta_Basic)
+	if !ok {
+		err := fmt.Errorf("not a basic object")
+		span.RecordError(err)
+		return nil, nil, err
+	}
+
 	// @TODO (jrc): update last_accessed out of band
 	// @TODO (jrc): read all chunks in parallel
 
 	buf := []byte{}
-	for ndx := range meta.NumChunks {
+	for ndx := range basicObjMeta.Basic.NumChunks {
 		chunkKey, err := s.objectKey(id, ndx)
 		if err != nil {
 			span.RecordError(err)
@@ -618,8 +625,8 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id stri
 	return meta, buf, nil
 }
 
-func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
-	ctx, span := s.tracer.Start(ctx, "writeObject")
+func (s *session) writeBasicObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
+	ctx, span := s.tracer.Start(ctx, "writeBasicObject")
 	defer span.End()
 
 	now := timestamppb.Now()
@@ -640,18 +647,27 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 		// create new
 		meta = &types.ObjectMeta{
 			Created: now,
+			Type: &types.ObjectMeta_Basic{
+				Basic: &types.BasicObjectMeta{},
+			},
 		}
 	}
 
 	meta.Updated = now
 	meta.LastAccess = now
-	meta.SizeBytes = uint64(len(data))
+
+	basicObjMeta, ok := meta.Type.(*types.ObjectMeta_Basic)
+	if !ok {
+		err := fmt.Errorf("not a basic object")
+		span.RecordError(err)
+		return err
+	}
 
 	const maxValBytes = 100_000
 	length := uint32(len(data))
-	meta.NumChunks = (length / maxValBytes) + 1
+	basicObjMeta.Basic.NumChunks = (length / maxValBytes) + 1
 	if length%maxValBytes == 0 {
-		meta.NumChunks = length / maxValBytes
+		basicObjMeta.Basic.NumChunks = length / maxValBytes
 	}
 
 	// write the meta object
@@ -663,7 +679,7 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 	tx.Set(metaKey, metaBuf)
 
 	// write all object data chunks
-	for ndx := range meta.NumChunks {
+	for ndx := range basicObjMeta.Basic.NumChunks {
 		start := ndx * maxValBytes
 		end := min((ndx+1)*maxValBytes, length)
 
@@ -692,21 +708,25 @@ func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id strin
 	}
 	tx.Clear(metaKey)
 
-	// clear all object chunks
-	begin, err := s.objectKey(id, 0)
-	if err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to get object begin key: %w", err)
+	// @TODO (jrc): support cascade deleteing lists and sets
+	switch typ := meta.Type.(type) {
+	case *types.ObjectMeta_Basic:
+		// clear all object chunks
+		begin, err := s.objectKey(id, 0)
+		if err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("failed to get object begin key: %w", err)
+		}
+		end, err := s.objectKey(id, typ.Basic.NumChunks-1)
+		if err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("failed to get object start key: %w", err)
+		}
+		tx.ClearRange(fdb.KeyRange{
+			Begin: begin,
+			End:   end,
+		})
 	}
-	end, err := s.objectKey(id, meta.NumChunks-1)
-	if err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to get object start key: %w", err)
-	}
-	tx.ClearRange(fdb.KeyRange{
-		Begin: begin,
-		End:   end,
-	})
 
 	span.SetStatus(codes.Ok, "deleteObject ok")
 	return nil
