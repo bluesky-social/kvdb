@@ -32,3 +32,11 @@ message ObjectMeta {
   uint32 num_chunks = 4;
   uint64 size_bytes = 5;
 }
+
+message ListMeta {
+  google.protobuf.Timestamp created = 1;
+  google.protobuf.Timestamp updated = 2;
+  google.protobuf.Timestamp last_access = 3;
+  uint64 num_items = 4;
+  uint64 item_start = 5;
+}

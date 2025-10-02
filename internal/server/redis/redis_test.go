@@ -890,3 +890,50 @@ func TestSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatInt(1), res)
 }
+
+func TestLists(t *testing.T) {
+	require := require.New(t)
+	ctx := t.Context()
+	sess := testSessionWithAuth(t)
+
+	list := testutil.RandString(24)
+	val1 := testutil.RandString(24)
+	val2 := testutil.RandString(24)
+
+	// invalid args
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "LLEN",
+	})
+	requireRESPError(t, res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LLEN",
+		Args: []resp.Value{resp.SimpleStringValue(list)},
+	})
+	require.Equal(resp.FormatInt(0), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LPUSH",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue(val1),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LPUSH",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue(val1),
+			resp.SimpleStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LLEN",
+		Args: []resp.Value{resp.SimpleStringValue(list)},
+	})
+	require.Equal(resp.FormatInt(3), res)
+}

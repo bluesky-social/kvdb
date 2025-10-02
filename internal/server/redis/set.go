@@ -24,13 +24,9 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
 
-	members := make([]string, 0, len(args)-1)
-	for ndx, arg := range args[1:] {
-		member, err := extractStringArg(arg)
-		if err != nil {
-			return "", recordErr(span, fmt.Errorf("failed to parse member argument at index %d: %w", ndx, err))
-		}
-		members = append(members, member)
+	members, err := parseVariadicArguments(args)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set value argument(s): %w", err))
 	}
 
 	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
@@ -113,13 +109,9 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
 	}
 
-	members := make([]string, 0, len(args)-1)
-	for _, arg := range args[1:] {
-		member, err := extractStringArg(arg)
-		if err != nil {
-			return "", recordErr(span, fmt.Errorf("failed to parse member argument: %w", err))
-		}
-		members = append(members, member)
+	members, err := parseVariadicArguments(args)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set value argument(s): %w", err))
 	}
 
 	removedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
