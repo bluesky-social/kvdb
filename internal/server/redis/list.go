@@ -24,7 +24,7 @@ func (s *session) handleLLen(ctx context.Context, args []resp.Value) (string, er
 
 	key, err := extractStringArg(args[0])
 	if err != nil {
-		return "", fmt.Errorf("failed to parse argument: %w", err)
+		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
 	}
 
 	numAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
@@ -80,7 +80,7 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 
 	key, err := extractStringArg(args[0])
 	if err != nil {
-		return "", fmt.Errorf("failed to parse argument: %w", err)
+		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
 	}
 
 	members, err := parseVariadicArguments(args)
