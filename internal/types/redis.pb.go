@@ -284,8 +284,8 @@ type ListMeta struct {
 	Updated       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
 	LastAccess    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_access,json=lastAccess,proto3" json:"last_access,omitempty"`
 	NumItems      uint64                 `protobuf:"varint,4,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
-	ItemStart     uint64                 `protobuf:"varint,5,opt,name=item_start,json=itemStart,proto3" json:"item_start,omitempty"`
-	ItemEnd       uint64                 `protobuf:"varint,6,opt,name=item_end,json=itemEnd,proto3" json:"item_end,omitempty"`
+	ItemHead      string                 `protobuf:"bytes,5,opt,name=item_head,json=itemHead,proto3" json:"item_head,omitempty"`
+	ItemTail      string                 `protobuf:"bytes,6,opt,name=item_tail,json=itemTail,proto3" json:"item_tail,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -348,18 +348,94 @@ func (x *ListMeta) GetNumItems() uint64 {
 	return 0
 }
 
-func (x *ListMeta) GetItemStart() uint64 {
+func (x *ListMeta) GetItemHead() string {
 	if x != nil {
-		return x.ItemStart
+		return x.ItemHead
 	}
-	return 0
+	return ""
 }
 
-func (x *ListMeta) GetItemEnd() uint64 {
+func (x *ListMeta) GetItemTail() string {
 	if x != nil {
-		return x.ItemEnd
+		return x.ItemTail
 	}
-	return 0
+	return ""
+}
+
+type ListObjectMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Created       *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=created,proto3" json:"created,omitempty"`
+	Updated       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
+	Id            string                 `protobuf:"bytes,3,opt,name=id,proto3" json:"id,omitempty"`
+	Next          string                 `protobuf:"bytes,4,opt,name=next,proto3" json:"next,omitempty"`
+	Previous      string                 `protobuf:"bytes,5,opt,name=previous,proto3" json:"previous,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListObjectMeta) Reset() {
+	*x = ListObjectMeta{}
+	mi := &file_redis_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListObjectMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListObjectMeta) ProtoMessage() {}
+
+func (x *ListObjectMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListObjectMeta.ProtoReflect.Descriptor instead.
+func (*ListObjectMeta) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ListObjectMeta) GetCreated() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Created
+	}
+	return nil
+}
+
+func (x *ListObjectMeta) GetUpdated() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Updated
+	}
+	return nil
+}
+
+func (x *ListObjectMeta) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ListObjectMeta) GetNext() string {
+	if x != nil {
+		return x.Next
+	}
+	return ""
+}
+
+func (x *ListObjectMeta) GetPrevious() string {
+	if x != nil {
+		return x.Previous
+	}
+	return ""
 }
 
 var File_redis_proto protoreflect.FileDescriptor
@@ -392,10 +468,15 @@ const file_redis_proto_rawDesc = "" +
 	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x12;\n" +
 	"\vlast_access\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"lastAccess\x12\x1b\n" +
-	"\tnum_items\x18\x04 \x01(\x04R\bnumItems\x12\x1d\n" +
-	"\n" +
-	"item_start\x18\x05 \x01(\x04R\titemStart\x12\x19\n" +
-	"\bitem_end\x18\x06 \x01(\x04R\aitemEnd*\x97\x01\n" +
+	"\tnum_items\x18\x04 \x01(\x04R\bnumItems\x12\x1b\n" +
+	"\titem_head\x18\x05 \x01(\tR\bitemHead\x12\x1b\n" +
+	"\titem_tail\x18\x06 \x01(\tR\bitemTail\"\xbc\x01\n" +
+	"\x0eListObjectMeta\x124\n" +
+	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
+	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x12\x0e\n" +
+	"\x02id\x18\x03 \x01(\tR\x02id\x12\x12\n" +
+	"\x04next\x18\x04 \x01(\tR\x04next\x12\x1a\n" +
+	"\bprevious\x18\x05 \x01(\tR\bprevious*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
 	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +
@@ -415,31 +496,34 @@ func file_redis_proto_rawDescGZIP() []byte {
 }
 
 var file_redis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_redis_proto_goTypes = []any{
 	(UserAccessLevel)(0),          // 0: types.UserAccessLevel
 	(*User)(nil),                  // 1: types.User
 	(*UserACLRule)(nil),           // 2: types.UserACLRule
 	(*ObjectMeta)(nil),            // 3: types.ObjectMeta
 	(*ListMeta)(nil),              // 4: types.ListMeta
-	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
+	(*ListObjectMeta)(nil),        // 5: types.ListObjectMeta
+	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
 }
 var file_redis_proto_depIdxs = []int32{
-	5,  // 0: types.User.created:type_name -> google.protobuf.Timestamp
-	5,  // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
+	6,  // 0: types.User.created:type_name -> google.protobuf.Timestamp
+	6,  // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
 	2,  // 2: types.User.rules:type_name -> types.UserACLRule
 	0,  // 3: types.UserACLRule.level:type_name -> types.UserAccessLevel
-	5,  // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
-	5,  // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
-	5,  // 6: types.ObjectMeta.last_access:type_name -> google.protobuf.Timestamp
-	5,  // 7: types.ListMeta.created:type_name -> google.protobuf.Timestamp
-	5,  // 8: types.ListMeta.updated:type_name -> google.protobuf.Timestamp
-	5,  // 9: types.ListMeta.last_access:type_name -> google.protobuf.Timestamp
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	6,  // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
+	6,  // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
+	6,  // 6: types.ObjectMeta.last_access:type_name -> google.protobuf.Timestamp
+	6,  // 7: types.ListMeta.created:type_name -> google.protobuf.Timestamp
+	6,  // 8: types.ListMeta.updated:type_name -> google.protobuf.Timestamp
+	6,  // 9: types.ListMeta.last_access:type_name -> google.protobuf.Timestamp
+	6,  // 10: types.ListObjectMeta.created:type_name -> google.protobuf.Timestamp
+	6,  // 11: types.ListObjectMeta.updated:type_name -> google.protobuf.Timestamp
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_redis_proto_init() }
@@ -453,7 +537,7 @@ func file_redis_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_redis_proto_rawDesc), len(file_redis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

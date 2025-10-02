@@ -38,6 +38,14 @@ message ListMeta {
   google.protobuf.Timestamp updated = 2;
   google.protobuf.Timestamp last_access = 3;
   uint64 num_items = 4;
-  uint64 item_start = 5;
-  uint64 item_end = 6;
+  string item_head = 5;
+  string item_tail= 6;
+}
+
+message ListObjectMeta {
+  google.protobuf.Timestamp created = 1;
+  google.protobuf.Timestamp updated = 2;
+  string id = 3;
+  string next = 4;
+  string previous = 5;
 }

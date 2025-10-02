@@ -3,7 +3,6 @@ package redis
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -98,27 +97,43 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 		if listMeta == nil {
 			// create a new list
 			listMeta = &types.ListMeta{
-				Created:   now,
-				ItemStart: math.MaxUint64 / 2,
-				ItemEnd:   math.MaxUint64 / 2,
+				Created: now,
 			}
 		}
 
-		// assign slots for these new list items and create object blobs for each
+		// create each item meta object and store the blob itself
 		for _, member := range members {
-			listMeta.NumItems += 1
+			objIDInt, err := s.allocateNewUID(ctx, tx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to allocate new uid: %w", err)
+			}
+			objID := strconv.FormatUint(objIDInt, 10)
 
-			var objKeyInt uint64
-			if left {
-				listMeta.ItemStart -= 1
-				objKeyInt = listMeta.ItemStart
-			} else {
-				listMeta.ItemEnd += 1
-				objKeyInt = listMeta.ItemEnd
+			objMeta := &types.ListObjectMeta{
+				Created: now,
+				Updated: now,
+				Id:      objID,
 			}
 
-			objKey := strconv.FormatUint(objKeyInt, 10)
-			if err := s.writeObject(ctx, tx, objKey, []byte(member)); err != nil {
+			listMeta.NumItems += 1
+			if left {
+				objMeta.Next = listMeta.ItemHead
+				listMeta.ItemHead = objID
+			} else {
+				objMeta.Previous = listMeta.ItemTail
+				listMeta.ItemTail = objID
+			}
+
+			objMetaKey, err := s.listObjMetaKey(key, objID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get list object meta key: %w", err)
+			}
+
+			if err := s.setProtoItem(objMetaKey, objMeta); err != nil {
+				return nil, fmt.Errorf("failed to write list object meta: %w", err)
+			}
+
+			if err := s.writeObject(ctx, tx, objID, []byte(member)); err != nil {
 				return nil, fmt.Errorf("failed to create object: %w", err)
 			}
 		}

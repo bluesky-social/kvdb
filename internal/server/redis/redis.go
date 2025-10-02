@@ -254,6 +254,22 @@ func (s *session) listKey(id string) (fdb.Key, error) {
 	return s.user.listDir.Pack(tuple.Tuple{id}), nil
 }
 
+// Returns the FDB key of an object in the per-user, per-list item directory
+func (s *session) listObjMetaKey(listID, objID string) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	dir, err := s.user.listDir.CreateOrOpen(s.fdb, []string{listID}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open per-list directory: %w", err)
+	}
+
+	return dir.Pack(tuple.Tuple{objID}), nil
+}
 func (s *session) write(msg string) {
 	_, err := s.conn.Write([]byte(msg))
 	if err != nil {
