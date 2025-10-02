@@ -285,6 +285,7 @@ type ListMeta struct {
 	LastAccess    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_access,json=lastAccess,proto3" json:"last_access,omitempty"`
 	NumItems      uint64                 `protobuf:"varint,4,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
 	ItemStart     uint64                 `protobuf:"varint,5,opt,name=item_start,json=itemStart,proto3" json:"item_start,omitempty"`
+	ItemEnd       uint64                 `protobuf:"varint,6,opt,name=item_end,json=itemEnd,proto3" json:"item_end,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -354,6 +355,13 @@ func (x *ListMeta) GetItemStart() uint64 {
 	return 0
 }
 
+func (x *ListMeta) GetItemEnd() uint64 {
+	if x != nil {
+		return x.ItemEnd
+	}
+	return 0
+}
+
 var File_redis_proto protoreflect.FileDescriptor
 
 const file_redis_proto_rawDesc = "" +
@@ -378,7 +386,7 @@ const file_redis_proto_rawDesc = "" +
 	"\n" +
 	"num_chunks\x18\x04 \x01(\rR\tnumChunks\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\"\xef\x01\n" +
+	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\"\x8a\x02\n" +
 	"\bListMeta\x124\n" +
 	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
 	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x12;\n" +
@@ -386,7 +394,8 @@ const file_redis_proto_rawDesc = "" +
 	"lastAccess\x12\x1b\n" +
 	"\tnum_items\x18\x04 \x01(\x04R\bnumItems\x12\x1d\n" +
 	"\n" +
-	"item_start\x18\x05 \x01(\x04R\titemStart*\x97\x01\n" +
+	"item_start\x18\x05 \x01(\x04R\titemStart\x12\x19\n" +
+	"\bitem_end\x18\x06 \x01(\x04R\aitemEnd*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
 	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +

@@ -50,12 +50,28 @@ func (s *session) handleLLen(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "lpush handled")
+	span.SetStatus(codes.Ok, "llen handled")
 	return resp.FormatUint(num), nil
 }
 
 func (s *session) handleLPush(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleLPush")
+	defer span.End()
+
+	span.SetStatus(codes.Ok, "lpush handled")
+	return s.handlePush(ctx, args, true)
+}
+
+func (s *session) handleRPush(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRPush")
+	defer span.End()
+
+	span.SetStatus(codes.Ok, "rpush handled")
+	return s.handlePush(ctx, args, false)
+}
+
+func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handlePush")
 	defer span.End()
 
 	if err := validateNumArgs(args, 2); err != nil {
@@ -84,15 +100,24 @@ func (s *session) handleLPush(ctx context.Context, args []resp.Value) (string, e
 			listMeta = &types.ListMeta{
 				Created:   now,
 				ItemStart: math.MaxUint64 / 2,
+				ItemEnd:   math.MaxUint64 / 2,
 			}
 		}
 
 		// assign slots for these new list items and create object blobs for each
 		for _, member := range members {
-			listMeta.ItemStart -= 1
 			listMeta.NumItems += 1
 
-			objKey := strconv.FormatUint(listMeta.ItemStart, 10)
+			var objKeyInt uint64
+			if left {
+				listMeta.ItemStart -= 1
+				objKeyInt = listMeta.ItemStart
+			} else {
+				listMeta.ItemEnd += 1
+				objKeyInt = listMeta.ItemEnd
+			}
+
+			objKey := strconv.FormatUint(objKeyInt, 10)
 			if err := s.writeObject(ctx, tx, objKey, []byte(member)); err != nil {
 				return nil, fmt.Errorf("failed to create object: %w", err)
 			}
@@ -114,6 +139,6 @@ func (s *session) handleLPush(ctx context.Context, args []resp.Value) (string, e
 		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "lpush handled")
+	span.SetStatus(codes.Ok, "push handled")
 	return resp.FormatInt(int64(len(members))), nil
 }

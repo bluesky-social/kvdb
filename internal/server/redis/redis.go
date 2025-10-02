@@ -362,8 +362,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleLLen(ctx, cmd.Args)
 	case "lpush":
 		res, err = s.handleLPush(ctx, cmd.Args)
-	// case "rpush":
-	// 	res, err = s.handleRPush(ctx, cmd.Args)
+	case "rpush":
+		res, err = s.handleRPush(ctx, cmd.Args)
 	// case "lindex":
 	// 	res, err = s.handleLIndex(ctx, cmd.Args)
 	default:

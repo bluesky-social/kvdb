@@ -3,12 +3,14 @@ package redis
 import (
 	"bufio"
 	"bytes"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/bluesky-social/kvdb/internal/testutil"
+	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -899,6 +901,8 @@ func TestLists(t *testing.T) {
 	list := testutil.RandString(24)
 	val1 := testutil.RandString(24)
 	val2 := testutil.RandString(24)
+	val3 := testutil.RandString(24)
+	val4 := testutil.RandString(24)
 
 	// invalid args
 	res := sess.handleCommand(ctx, &resp.Command{
@@ -911,6 +915,12 @@ func TestLists(t *testing.T) {
 		Args: []resp.Value{resp.SimpleStringValue(list)},
 	})
 	require.Equal(resp.FormatInt(0), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LPUSH",
+		Args: []resp.Value{resp.SimpleStringValue(list)},
+	})
+	requireRESPError(t, res)
 
 	res = sess.handleCommand(ctx, &resp.Command{
 		Name: "LPUSH",
@@ -936,4 +946,37 @@ func TestLists(t *testing.T) {
 		Args: []resp.Value{resp.SimpleStringValue(list)},
 	})
 	require.Equal(resp.FormatInt(3), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "RPUSH",
+		Args: []resp.Value{
+			resp.SimpleStringValue(list),
+			resp.SimpleStringValue(val3),
+			resp.SimpleStringValue(val4),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "LLEN",
+		Args: []resp.Value{resp.SimpleStringValue(list)},
+	})
+	require.Equal(resp.FormatInt(5), res)
+
+	{
+		// ensure our item meta is correct
+		metaAny, err := sess.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+			_, meta, err := sess.getListMeta(ctx, tx, list)
+			return meta, err
+		})
+		require.NoError(err)
+		require.NotNil(metaAny)
+
+		meta, err := cast[*types.ListMeta](metaAny)
+		require.NoError(err)
+
+		mid := uint64(math.MaxUint64 / 2)
+		require.Equal(mid-3, meta.ItemStart)
+		require.Equal(mid+2, meta.ItemEnd)
+	}
 }
