@@ -107,12 +107,18 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("failed to initialize user reverse uid directory: %w", err))
 	}
 
+	listDir, err := userDir.CreateOrOpen(s.fdb, []string{"list"}, nil)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to initialize user list directory: %w", err))
+	}
+
 	s.userMu.Lock()
 	s.user = &sessionUser{
 		objDir:        objDir,
 		metaDir:       metaDir,
 		uidDir:        uidDir,
 		reverseUIDDir: reverseUIDDir,
+		listDir:       listDir,
 		user:          user,
 	}
 	s.userMu.Unlock()

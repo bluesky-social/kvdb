@@ -143,6 +143,7 @@ type sessionUser struct {
 	metaDir       directory.DirectorySubspace
 	uidDir        directory.DirectorySubspace
 	reverseUIDDir directory.DirectorySubspace
+	listDir       directory.DirectorySubspace
 
 	user *types.User
 }
@@ -241,6 +242,34 @@ func (s *session) reverseUIDKey(id string) (fdb.Key, error) {
 	return s.user.reverseUIDDir.Pack(tuple.Tuple{id}), nil
 }
 
+// Returns the FDB key of an object in the per-user list directory
+func (s *session) listKey(id string) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	return s.user.listDir.Pack(tuple.Tuple{id}), nil
+}
+
+// Returns the FDB key of an object in the per-user, per-list item directory
+func (s *session) listObjMetaKey(listID, objID string) (fdb.Key, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	dir, err := s.user.listDir.CreateOrOpen(s.fdb, []string{listID}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open per-list directory: %w", err)
+	}
+
+	return dir.Pack(tuple.Tuple{objID}), nil
+}
 func (s *session) write(msg string) {
 	_, err := s.conn.Write([]byte(msg))
 	if err != nil {
@@ -345,6 +374,14 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetUnion(ctx, cmd.Args)
 	case "sdiff":
 		res, err = s.handleSetDiff(ctx, cmd.Args)
+	case "llen":
+		res, err = s.handleLLen(ctx, cmd.Args)
+	case "lpush":
+		res, err = s.handleLPush(ctx, cmd.Args)
+	case "rpush":
+		res, err = s.handleRPush(ctx, cmd.Args)
+	case "lindex":
+		res, err = s.handleLIndex(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
@@ -675,6 +712,38 @@ func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id strin
 	return nil
 }
 
+// Returns the associated metadata for an object. Returns nil if the object does not exist.
+func (s *session) getListMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ListMeta, error) {
+	ctx, span := s.tracer.Start(ctx, "getListMeta") // nolint
+	defer span.End()
+
+	listKey, err := s.listKey(id)
+	if err != nil {
+		span.RecordError(err)
+		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
+	}
+
+	metaBuf, err := tx.Get(listKey).Get()
+	if err != nil {
+		span.RecordError(err)
+		return listKey, nil, fmt.Errorf("failed to get object meta from database: %w", err)
+	}
+
+	if len(metaBuf) == 0 {
+		span.SetStatus(codes.Ok, "getList ok")
+		return listKey, nil, nil
+	}
+
+	meta := &types.ListMeta{}
+	if err = proto.Unmarshal(metaBuf, meta); err != nil {
+		span.RecordError(err)
+		return listKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "getListMeta ok")
+	return listKey, meta, nil
+}
+
 // Interns, stores, and returns a new UID. The upper 16 bits are a random sequence number, and the lower
 // 48 bits are a sequential number within that space. This allows for many unique IDs per sequence and
 // very low contention when allocating new IDs.
@@ -852,4 +921,17 @@ func (s *session) memberFromUID(ctx context.Context, tx fdb.ReadTransaction, uid
 
 	span.SetStatus(codes.Ok, "memberFromUID ok")
 	return string(member), nil
+}
+
+func parseVariadicArguments(args []resp.Value) ([]string, error) {
+	members := make([]string, 0, len(args)-1)
+	for ndx, arg := range args[1:] {
+		member, err := extractStringArg(arg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse argument at index %d: %w", ndx, err)
+		}
+		members = append(members, member)
+	}
+
+	return members, nil
 }

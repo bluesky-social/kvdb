@@ -511,6 +511,10 @@ func FormatInt(n int64) string {
 	return fmt.Sprintf(":%d\r\n", n)
 }
 
+func FormatUint(n uint64) string {
+	return fmt.Sprintf(":%d\r\n", n)
+}
+
 func IntegerValue(i int) Value {
 	return Value{
 		Type:  TypeInteger,
