@@ -1,300 +1,329 @@
 package redis
 
-// import (
-// 	"context"
-// 	"fmt"
-// 	"strconv"
+import (
+	"context"
+	"fmt"
+	"strconv"
 
-// 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-// 	"github.com/bluesky-social/kvdb/internal/metrics"
-// 	"github.com/bluesky-social/kvdb/internal/types"
-// 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
-// 	"google.golang.org/protobuf/proto"
-// 	"google.golang.org/protobuf/types/known/timestamppb"
-// )
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/bluesky-social/kvdb/internal/metrics"
+	"github.com/bluesky-social/kvdb/internal/types"
+	"github.com/bluesky-social/kvdb/pkg/serde/resp"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
 
-// func (s *session) handleLLen(ctx context.Context, args []resp.Value) (string, error) {
-// 	ctx, span := s.tracer.Start(ctx, "handleLLen")
-// 	defer span.End()
+func (s *session) handleLLen(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleLLen")
+	defer span.End()
 
-// 	if err := validateNumArgs(args, 1); err != nil {
-// 		return "", recordErr(span, err)
-// 	}
+	if err := validateNumArgs(args, 1); err != nil {
+		return "", recordErr(span, err)
+	}
 
-// 	key, err := extractStringArg(args[0])
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
-// 	}
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
+	}
 
-// 	numAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-// 		_, listMeta, err := s.getListMeta(ctx, tx, key)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("failed to get list meta: %w", err)
-// 		}
+	numAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		_, listMeta, err := s.getListMeta(ctx, tx, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get list meta: %w", err)
+		}
 
-// 		if listMeta == nil {
-// 			return uint64(0), nil
-// 		}
+		if listMeta == nil {
+			return uint64(0), nil
+		}
 
-// 		// @TODO (jrc): update last_accessed out of band
+		// @TODO (jrc): update last_accessed out of band
 
-// 		return listMeta.NumItems, nil
-// 	})
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
-// 	}
+		return listMeta.NumItems, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
+	}
 
-// 	num, err := cast[uint64](numAny)
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
-// 	}
+	num, err := cast[uint64](numAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
 
-// 	metrics.SpanOK(span)
-// 	return resp.FormatUint(num), nil
-// }
+	metrics.SpanOK(span)
+	return resp.FormatUint(num), nil
+}
 
-// func (s *session) handleLPush(ctx context.Context, args []resp.Value) (string, error) {
-// 	ctx, span := s.tracer.Start(ctx, "handleLPush")
-// 	defer span.End()
+func (s *session) handleLPush(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleLPush")
+	defer span.End()
 
-// 	metrics.SpanOK(span)
-// 	return s.handlePush(ctx, args, true)
-// }
+	res, err := s.handlePush(ctx, args, true)
+	if err != nil {
+		span.RecordError(err)
+		return res, err
+	}
 
-// func (s *session) handleRPush(ctx context.Context, args []resp.Value) (string, error) {
-// 	ctx, span := s.tracer.Start(ctx, "handleRPush")
-// 	defer span.End()
+	metrics.SpanOK(span)
+	return res, err
+}
 
-// 	metrics.SpanOK(span)
-// 	return s.handlePush(ctx, args, false)
-// }
+func (s *session) handleRPush(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleRPush")
+	defer span.End()
 
-// func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) (string, error) {
-// 	ctx, span := s.tracer.Start(ctx, "handlePush")
-// 	defer span.End()
+	res, err := s.handlePush(ctx, args, false)
+	if err != nil {
+		span.RecordError(err)
+		return res, err
+	}
 
-// 	if err := validateNumArgs(args, 2); err != nil {
-// 		return "", recordErr(span, err)
-// 	}
+	metrics.SpanOK(span)
+	return res, err
+}
 
-// 	key, err := extractStringArg(args[0])
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
-// 	}
+func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handlePush")
+	defer span.End()
 
-// 	members, err := parseVariadicArguments(args)
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to parse list value argument(s): %w", err))
-// 	}
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
 
-// 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-// 		metaKey, objMeta, err := s.getObjectMeta(ctx, tx, key)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("failed to get list meta: %w", err)
-// 		}
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
+	}
 
-// 		now := timestamppb.Now()
-// 		if objMeta == nil {
-// 			// create a new list
-// 			objMeta = &types.ObjectMeta{
-// 				Created: now,
-// 				Type: &types.ObjectMeta_List{
-// 					List: &types.ListMeta{},
-// 				},
-// 			}
-// 		}
+	members, err := parseVariadicArguments(args)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list value argument(s): %w", err))
+	}
 
-// 		listMeta, ok := objMeta.Type.(*types.ObjectMeta_List)
-// 		if !ok {
-// 			return nil, fmt.Errorf("object is not a list")
-// 		}
+	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		listMetaKey, objMeta, err := s.getObjectMeta(ctx, tx, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get list meta: %w", err)
+		}
 
-// 		// create each item meta object and store the blob itself
-// 		for _, member := range members {
-// 			objIDInt, err := s.allocateNewUID(ctx, tx)
-// 			if err != nil {
-// 				return nil, fmt.Errorf("failed to allocate new uid: %w", err)
-// 			}
-// 			objID := strconv.FormatUint(objIDInt, 10)
+		now := timestamppb.Now()
+		if objMeta == nil {
+			// create a new list object
+			objMeta = &types.ObjectMeta{
+				Created: now,
+				Type:    &types.ObjectMeta_List{List: &types.ListMeta{}},
+			}
+		}
+		objMeta.Updated = now
+		objMeta.LastAccess = now
 
-// 			listObjMeta := &types.ObjectMeta{
-// 				Created: now,
-// 				Updated: now,
-// 				Type: &types.ObjectMeta_ListItem{
-// 					ListItem: &types.ListItemMeta{},
-// 				},
-// 			}
+		objMetaList, err := cast[*types.ObjectMeta_List](objMeta.Type)
+		if err != nil {
+			return nil, err
+		}
+		listMeta := objMetaList.List
 
-// 			listMeta.List.NumItems += 1
-// 			if left {
-// 				// assign back pointers if a previous list head exists
-// 				headKey, err := s.listObjMetaKey(key, listMeta.List.ItemHead.ItemHead)
-// 				if err != nil {
-// 					return nil, fmt.Errorf("failed to get list head key: %w", err)
-// 				}
+		// create each item meta object and store the blob itself
+		for _, member := range members {
+			listMeta.NumItems += 1
 
-// 				head := &types.ListObjectMeta{}
-// 				exists, err := s.getProtoItem(headKey, head)
-// 				if err != nil {
-// 					return nil, fmt.Errorf("failed to get list head: %w", err)
-// 				}
-// 				if exists {
-// 					head.Previous = objID
-// 					if err := s.setProtoItem(headKey, head); err != nil {
-// 						return nil, fmt.Errorf("failed to set list head: %w", err)
-// 					}
-// 				} else {
-// 					// we're creating a new list, so assign both the head and tail
-// 					listMeta.ItemTail = objID
-// 				}
+			// allocated a UID for this list item
+			itemIDInt, err := s.allocateNewUID(ctx, tx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to allocate new uid: %w", err)
+			}
+			itemID := strconv.FormatUint(itemIDInt, 10)
 
-// 				// assign forwards pointers
-// 				listObjMeta.Next = listMeta.ItemHead
-// 				listMeta.ItemHead = objID
-// 			} else {
-// 				// assign forwards pointers if a previous list tail exists
-// 				tailKey, err := s.listObjMetaKey(key, listMeta.ItemTail)
-// 				if err != nil {
-// 					return nil, fmt.Errorf("failed to get list tail key: %w", err)
-// 				}
+			listItemMeta := &types.ListItemMeta{}
+			if left {
+				headKey, err := s.listItemMetaKey(key, listMeta.ItemHead)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get list head key: %w", err)
+				}
 
-// 				tail := &types.ListObjectMeta{}
-// 				exists, err := s.getProtoItem(tailKey, tail)
-// 				if err != nil {
-// 					return nil, fmt.Errorf("failed to get list tail: %w", err)
-// 				}
-// 				if exists {
-// 					tail.Next = objID
-// 					if err := s.setProtoItem(tailKey, tail); err != nil {
-// 						return nil, fmt.Errorf("failed to set list tail: %w", err)
-// 					}
-// 				} else {
-// 					// we're creating a new list, so assign both the head and tail
-// 					listMeta.ItemHead = objID
-// 				}
+				headObj := &types.ObjectMeta{}
+				exists, err := getProtoItem(tx, headKey, headObj)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get list head: %w", err)
+				}
 
-// 				// assign back pointers
-// 				listObjMeta.Previous = listMeta.ItemTail
-// 				listMeta.ItemTail = objID
-// 			}
+				if !exists {
+					// we're creating a new list, so assign the tail in addition to the head
+					listMeta.ItemTail = itemID
+				} else {
+					// assign back pointers if a previous list head exists
+					head, err := cast[*types.ObjectMeta_ListItem](headObj.Type)
+					if err != nil {
+						return nil, err
+					}
+					head.ListItem.Previous = itemID
 
-// 			objMetaKey, err := s.listObjMetaKey(key, objID)
-// 			if err != nil {
-// 				return nil, fmt.Errorf("failed to get list object meta key: %w", err)
-// 			}
+					if err := setProtoItem(tx, headKey, headObj); err != nil {
+						return nil, fmt.Errorf("failed to set list head: %w", err)
+					}
+				}
 
-// 			if err := s.setProtoItem(objMetaKey, listObjMeta); err != nil {
-// 				return nil, fmt.Errorf("failed to write list object meta: %w", err)
-// 			}
+				// assign forwards pointers
+				listItemMeta.Next = listMeta.ItemHead
+				listMeta.ItemHead = itemID
+			} else {
+				tailKey, err := s.listItemMetaKey(key, listMeta.ItemTail)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get list tail key: %w", err)
+				}
 
-// 			if err := s.writeObject(ctx, tx, objID, []byte(member)); err != nil {
-// 				return nil, fmt.Errorf("failed to create object: %w", err)
-// 			}
-// 		}
+				tailObj := &types.ObjectMeta{}
+				exists, err := getProtoItem(tx, tailKey, tailObj)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get list tail: %w", err)
+				}
 
-// 		// update and save our list meta
-// 		listMeta.Updated = now
-// 		listMeta.LastAccess = now
+				if !exists {
+					// we're creating a new list, so assign the head in addition to the tail
+					listMeta.ItemHead = itemID
+				} else {
+					// assign forwards pointers if a previous list tail exists
+					tail, err := cast[*types.ObjectMeta_ListItem](tailObj.Type)
+					if err != nil {
+						return nil, err
+					}
+					tail.ListItem.Next = itemID
 
-// 		metaBuf, err := proto.Marshal(listMeta)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("failed to proto marshal list meta: %w", err)
-// 		}
-// 		tx.Set(metaKey, metaBuf)
+					if err := setProtoItem(tx, tailKey, tailObj); err != nil {
+						return nil, fmt.Errorf("failed to set list tail: %w", err)
+					}
+				}
 
-// 		return nil, nil
-// 	})
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
-// 	}
+				// assign back pointers
+				listItemMeta.Previous = listMeta.ItemTail
+				listMeta.ItemTail = itemID
+			}
 
-// 	metrics.SpanOK(span)
-// 	return resp.FormatInt(int64(len(members))), nil
-// }
+			// save the list item meta object
+			itemMetaKey, err := s.listItemMetaKey(key, itemID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get list item meta key: %w", err)
+			}
 
-// func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, error) {
-// 	ctx, span := s.tracer.Start(ctx, "handleLIndex")
-// 	defer span.End()
+			listObjMeta := &types.ObjectMeta{
+				Created: now,
+				Updated: now,
+				Type: &types.ObjectMeta_ListItem{
+					ListItem: listItemMeta,
+				},
+			}
 
-// 	if err := validateNumArgs(args, 2); err != nil {
-// 		return "", recordErr(span, err)
-// 	}
+			if err := setProtoItem(tx, itemMetaKey, listObjMeta); err != nil {
+				return nil, fmt.Errorf("failed to write list item meta: %w", err)
+			}
 
-// 	key, err := extractStringArg(args[0])
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
-// 	}
+			// save the list item object blob
+			if err := s.writeObject(ctx, tx, itemID, []byte(member)); err != nil {
+				return nil, fmt.Errorf("failed to create list item: %w", err)
+			}
+		}
 
-// 	indexStr, err := extractStringArg(args[1])
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to parse list index argument: %w", err))
-// 	}
-// 	index, err := strconv.ParseInt(indexStr, 10, 64)
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to parse list index argument: %w", err))
-// 	}
+		// save the full list object meta
+		if err := setProtoItem(tx, listMetaKey, objMeta); err != nil {
+			return nil, fmt.Errorf("failed to write list object meta: %w", err)
+		}
 
-// 	bufAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-// 		_, listMeta, err := s.getListMeta(ctx, tx, key)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("failed to get list meta: %w", err)
-// 		}
+		return nil, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
+	}
 
-// 		if listMeta == nil {
-// 			return nil, nil
-// 		}
+	metrics.SpanOK(span)
+	return resp.FormatInt(int64(len(members))), nil
+}
 
-// 		// @TODO (jrc): update last_accessed out of band
+func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleLIndex")
+	defer span.End()
 
-// 		targetNdx := index
-// 		if targetNdx < 0 {
-// 			// wrap around if negative (using addition because targetNdx is already negative)
-// 			targetNdx = int64(listMeta.NumItems) + targetNdx
-// 		}
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
 
-// 		objKey := listMeta.ItemHead
-// 		for targetNdx > 0 && objKey != "" {
-// 			objMetaKey, err := s.listObjMetaKey(key, objKey)
-// 			if err != nil {
-// 				return nil, fmt.Errorf("failed to get list object meta: %w", err)
-// 			}
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list key argument: %w", err))
+	}
 
-// 			listObjMeta := &types.ListObjectMeta{}
-// 			ok, err := s.getProtoItem(objMetaKey, listObjMeta)
-// 			if err != nil {
-// 				return nil, fmt.Errorf("failed to get list object meta: %w", err)
-// 			}
-// 			if !ok {
-// 				return nil, fmt.Errorf("list object meta not found")
-// 			}
+	indexStr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list index argument: %w", err))
+	}
+	index, err := strconv.ParseInt(indexStr, 10, 64)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse list index argument: %w", err))
+	}
 
-// 			targetNdx -= 1
-// 			objKey = listObjMeta.Next
-// 		}
+	bufAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		_, listMeta, err := s.getListMeta(ctx, tx, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get list meta: %w", err)
+		}
 
-// 		_, buf, err := s.getObject(ctx, tx, objKey)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("failed to get object payload: %w", err)
-// 		}
-// 		if len(buf) == 0 {
-// 			return nil, nil
-// 		}
-// 		return buf, nil
-// 	})
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
-// 	}
+		if listMeta == nil {
+			return nil, nil
+		}
 
-// 	if bufAny == nil {
-// 		metrics.SpanOK(span)
-// 		return resp.FormatNil(), nil
-// 	}
+		// @TODO (jrc): update last_accessed out of band
 
-// 	buf, err := cast[[]byte](bufAny)
-// 	if err != nil {
-// 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
-// 	}
+		targetNdx := index
+		if targetNdx < 0 {
+			// wrap around if negative (using addition because targetNdx is already negative)
+			targetNdx = int64(listMeta.NumItems) + targetNdx
+		}
 
-// 	metrics.SpanOK(span)
-// 	return resp.FormatBulkString(string(buf)), nil
-// }
+		objKey := listMeta.ItemHead
+		for targetNdx > 0 && objKey != "" {
+			itemMetaKey, err := s.listItemMetaKey(key, objKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get list item meta: %w", err)
+			}
+
+			objMeta := &types.ObjectMeta{}
+			ok, err := getProtoItem(tx, itemMetaKey, objMeta)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get list object meta: %w", err)
+			}
+			if !ok {
+				return nil, fmt.Errorf("list object meta not found")
+			}
+
+			listItemMeta, err := cast[*types.ObjectMeta_ListItem](objMeta.Type)
+			if err != nil {
+				return nil, err
+			}
+
+			targetNdx -= 1
+			objKey = listItemMeta.ListItem.Next
+		}
+
+		_, buf, err := s.getObject(ctx, tx, objKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get object payload: %w", err)
+		}
+		if len(buf) == 0 {
+			return nil, nil
+		}
+		return buf, nil
+	})
+	if err != nil {
+		return "", recordErr(span, err)
+	}
+
+	if bufAny == nil {
+		metrics.SpanOK(span)
+		return resp.FormatNil(), nil
+	}
+
+	buf, err := cast[[]byte](bufAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	metrics.SpanOK(span)
+	return resp.FormatBulkString(string(buf)), nil
+}

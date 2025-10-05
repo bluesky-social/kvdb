@@ -241,20 +241,8 @@ func (s *session) reverseUIDKey(id string) (fdb.Key, error) {
 	return s.user.reverseUIDDir.Pack(tuple.Tuple{id}), nil
 }
 
-// Returns the FDB key of an object in the per-user list directory
-func (s *session) listKey(id string) (fdb.Key, error) {
-	s.userMu.RLock()
-	defer s.userMu.RUnlock()
-
-	if s.user == nil {
-		return nil, fmt.Errorf("authentication is required")
-	}
-
-	return s.user.listDir.Pack(tuple.Tuple{id}), nil
-}
-
 // Returns the FDB key of an object in the per-user, per-list item directory
-func (s *session) listObjMetaKey(listID, objID string) (fdb.Key, error) {
+func (s *session) listItemMetaKey(listID, itemID string) (fdb.Key, error) {
 	s.userMu.RLock()
 	defer s.userMu.RUnlock()
 
@@ -267,8 +255,9 @@ func (s *session) listObjMetaKey(listID, objID string) (fdb.Key, error) {
 		return nil, fmt.Errorf("failed to open per-list directory: %w", err)
 	}
 
-	return dir.Pack(tuple.Tuple{objID}), nil
+	return dir.Pack(tuple.Tuple{itemID}), nil
 }
+
 func (s *session) write(msg string) {
 	_, err := s.conn.Write([]byte(msg))
 	if err != nil {
@@ -373,14 +362,14 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetUnion(ctx, cmd.Args)
 	case "sdiff":
 		res, err = s.handleSetDiff(ctx, cmd.Args)
-	// case "llen":
-	// 	res, err = s.handleLLen(ctx, cmd.Args)
-	// case "lpush":
-	// 	res, err = s.handleLPush(ctx, cmd.Args)
-	// case "rpush":
-	// 	res, err = s.handleRPush(ctx, cmd.Args)
-	// case "lindex":
-	// 	res, err = s.handleLIndex(ctx, cmd.Args)
+	case "llen":
+		res, err = s.handleLLen(ctx, cmd.Args)
+	case "lpush":
+		res, err = s.handleLPush(ctx, cmd.Args)
+	case "rpush":
+		res, err = s.handleRPush(ctx, cmd.Args)
+	case "lindex":
+		res, err = s.handleLIndex(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
@@ -466,35 +455,25 @@ func cast[T any](item any) (T, error) {
 	}
 
 	var t T
-	return t, fmt.Errorf("failed to cast to %T", t)
+	return t, fmt.Errorf("failed to cast item of type %T to %T", item, t)
 }
 
-func (s *session) setProtoItem(key fdb.Key, item proto.Message) error {
+func setProtoItem(tx fdb.Transaction, key fdb.Key, item proto.Message) error {
 	buf, err := proto.Marshal(item)
 	if err != nil {
 		return fmt.Errorf("failed to proto marshal item: %w", err)
 	}
 
-	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		tx.Set(key, buf)
-		return nil, nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to write item to database: %w", err)
-	}
-
+	tx.Set(key, buf)
 	return nil
 }
 
-func getItem[T any](s *session, key fdb.Key) (T, error) {
+func getItem[T any](tx fdb.ReadTransaction, key fdb.Key) (T, error) {
 	var item T
-	itemAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		return tx.Get(key).Get()
-	})
+	itemAny, err := tx.Get(key).Get()
 	if err != nil {
 		return item, err
 	}
-
 	if itemAny == nil {
 		return item, nil // item does not exist
 	}
@@ -502,8 +481,8 @@ func getItem[T any](s *session, key fdb.Key) (T, error) {
 	return cast[T](itemAny)
 }
 
-func (s *session) getProtoItem(key fdb.Key, item proto.Message) (bool, error) {
-	buf, err := getItem[[]byte](s, key)
+func getProtoItem(tx fdb.ReadTransaction, key fdb.Key, item proto.Message) (bool, error) {
+	buf, err := getItem[[]byte](tx, key)
 	if err != nil {
 		return false, err
 	}
@@ -521,15 +500,21 @@ func (s *session) getProtoItem(key fdb.Key, item proto.Message) (bool, error) {
 
 func (s *session) getUser(username string) (*types.User, error) {
 	user := &types.User{}
-	exists, err := s.getProtoItem(s.userKey(username), user)
+	existsAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		return getProtoItem(tx, s.userKey(username), user)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	exists, err := cast[bool](existsAny)
 	if err != nil {
 		return nil, err
 	}
 
 	if !exists {
-		return nil, nil
+		user = nil
 	}
-
 	return user, nil
 }
 
@@ -547,68 +532,79 @@ func userIsAdmin(user *types.User) bool {
 	return false
 }
 
-// Returns the associated metadata for an object of any type. Returns nil if it not exist.
-func (s *session) getMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+func (s *session) getMeta(ctx context.Context, tx fdb.ReadTransaction, id string, meta proto.Message) (bool, fdb.Key, error) {
 	ctx, span := s.tracer.Start(ctx, "getMeta") // nolint
 	defer span.End()
 
 	metaKey, err := s.metaKey(id)
 	if err != nil {
 		span.RecordError(err)
-		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
+		return false, nil, fmt.Errorf("failed to get meta key: %w", err)
 	}
 
 	metaBuf, err := tx.Get(metaKey).Get()
 	if err != nil {
 		span.RecordError(err)
-		return metaKey, nil, fmt.Errorf("failed to get object meta from database: %w", err)
+		return false, metaKey, fmt.Errorf("failed to get object meta: %w", err)
 	}
 
 	if len(metaBuf) == 0 {
 		metrics.SpanOK(span)
-		return metaKey, nil, nil
+		return false, metaKey, nil
 	}
 
-	meta := &types.ObjectMeta{}
 	if err = proto.Unmarshal(metaBuf, meta); err != nil {
 		span.RecordError(err)
-		return metaKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
+		return false, metaKey, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
 	}
 
 	metrics.SpanOK(span)
-	return metaKey, meta, nil
+	return true, metaKey, nil
+}
+
+// Returns the associated metadata for an object of any type. Returns nil if it not exist.
+func (s *session) getObjectMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+	ctx, span := s.tracer.Start(ctx, "getObjectMeta")
+	defer span.End()
+
+	meta := &types.ObjectMeta{}
+	exists, key, err := s.getMeta(ctx, tx, id, meta)
+	if err != nil {
+		span.RecordError(err)
+		return nil, nil, err
+	}
+	if !exists {
+		meta = nil
+	}
+
+	metrics.SpanOK(span)
+	return key, meta, nil
 }
 
 // Returns the associated metadata for an object. Returns nil if the object does not exist.
 func (s *session) getListMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ListMeta, error) {
-	ctx, span := s.tracer.Start(ctx, "getListMeta") // nolint
+	ctx, span := s.tracer.Start(ctx, "getListMeta")
 	defer span.End()
 
-	listKey, err := s.listKey(id)
+	key, objMeta, err := s.getObjectMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
-		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
+		return nil, nil, fmt.Errorf("failed to get object meta: %w", err)
 	}
-
-	metaBuf, err := tx.Get(listKey).Get()
-	if err != nil {
-		span.RecordError(err)
-		return listKey, nil, fmt.Errorf("failed to get object meta from database: %w", err)
-	}
-
-	if len(metaBuf) == 0 {
+	if objMeta == nil {
+		// item does not exist
 		metrics.SpanOK(span)
-		return listKey, nil, nil
+		return key, nil, nil
 	}
 
-	meta := &types.ListMeta{}
-	if err = proto.Unmarshal(metaBuf, meta); err != nil {
+	listMeta, err := cast[*types.ObjectMeta_List](objMeta.Type)
+	if err != nil {
 		span.RecordError(err)
-		return listKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
+		return nil, nil, err
 	}
 
 	metrics.SpanOK(span)
-	return listKey, meta, nil
+	return key, listMeta.List, nil
 }
 
 // Interns, stores, and returns a new UID. The upper 16 bits are a random sequence number, and the lower

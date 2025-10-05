@@ -18,7 +18,7 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id stri
 	ctx, span := s.tracer.Start(ctx, "getObject")
 	defer span.End()
 
-	_, meta, err := s.getMeta(ctx, tx, id)
+	_, meta, err := s.getObjectMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
 		return nil, nil, err
@@ -71,7 +71,7 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 	now := timestamppb.Now()
 
 	// check if the object already exists and should be overwritten
-	metaKey, meta, err := s.getMeta(ctx, tx, id)
+	metaKey, meta, err := s.getObjectMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
 		return err
@@ -189,12 +189,12 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 		return buf, err
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
+		return "", recordErr(span, fmt.Errorf("failed to get object: %w", err))
 	}
 
 	buf, err := cast[[]byte](bufAny)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to cast result value: %w", err))
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
 	res := resp.FormatNil()
@@ -220,7 +220,7 @@ func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	existsAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		_, meta, err := s.getMeta(ctx, tx, key)
+		_, meta, err := s.getObjectMeta(ctx, tx, key)
 		if err != nil {
 			return nil, err
 		}
@@ -232,7 +232,7 @@ func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, 
 
 	exists, err := cast[bool](existsAny)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to cast result value: %w", err))
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
 	metrics.SpanOK(span)
@@ -282,7 +282,7 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, meta, err := s.getMeta(ctx, tx, key)
+		_, meta, err := s.getObjectMeta(ctx, tx, key)
 		if err != nil {
 			return false, err
 		}

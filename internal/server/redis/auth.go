@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
@@ -225,7 +226,11 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 		}},
 	}
 
-	if err := s.setProtoItem(s.userKey(username), user); err != nil {
+	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		err := setProtoItem(tx, s.userKey(username), user)
+		return nil, err
+	})
+	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to save user to database: %w", err))
 	}
 

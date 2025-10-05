@@ -892,8 +892,6 @@ func TestSets(t *testing.T) {
 }
 
 func TestLists(t *testing.T) {
-	t.SkipNow()
-
 	require := require.New(t)
 	ctx := t.Context()
 	sess := testSessionWithAuth(t)
