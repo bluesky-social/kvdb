@@ -7,8 +7,8 @@ package redis
 // 	roaring "github.com/RoaringBitmap/roaring/v2/roaring64"
 // 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 // 	"github.com/bluesky-social/go-util/pkg/concurrent"
+// 	"github.com/bluesky-social/kvdb/internal/metrics"
 // 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
-// 	"go.opentelemetry.io/otel/codes"
 // )
 
 // func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, error) {
@@ -92,7 +92,7 @@ package redis
 // 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 // 	}
 
-// 	span.SetStatus(codes.Ok, "sadd handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatInt(added), nil
 // }
 
@@ -184,7 +184,7 @@ package redis
 // 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 // 	}
 
-// 	span.SetStatus(codes.Ok, "srem handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatInt(removed), nil
 // }
 
@@ -248,7 +248,7 @@ package redis
 // 		isMember = bitmap.Contains(res.memberUID)
 // 	}
 
-// 	span.SetStatus(codes.Ok, "sismember handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatBoolAsInt(isMember), nil
 // }
 
@@ -292,7 +292,7 @@ package redis
 // 		cardinality = int64(bitmap.GetCardinality())
 // 	}
 
-// 	span.SetStatus(codes.Ok, "scard handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatInt(cardinality), nil
 // }
 
@@ -353,7 +353,7 @@ package redis
 // 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 // 	}
 
-// 	span.SetStatus(codes.Ok, "smembers handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatArrayOfBulkStrings(members), nil
 // }
 
@@ -377,7 +377,7 @@ package redis
 // 		return "", err
 // 	}
 
-// 	span.SetStatus(codes.Ok, "sinter handled")
+// 	metrics.SpanOK(span)
 // 	return resp, nil
 // }
 
@@ -397,7 +397,7 @@ package redis
 // 		return "", err
 // 	}
 
-// 	span.SetStatus(codes.Ok, "sunion handled")
+// 	metrics.SpanOK(span)
 // 	return resp, nil
 // }
 
@@ -417,7 +417,7 @@ package redis
 // 		return "", err
 // 	}
 
-// 	span.SetStatus(codes.Ok, "sdiff handled")
+// 	metrics.SpanOK(span)
 // 	return resp, nil
 // }
 
@@ -509,6 +509,6 @@ package redis
 // 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 // 	}
 
-// 	span.SetStatus(codes.Ok, "multi-set operation handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatArrayOfBulkStrings(members), nil
 // }

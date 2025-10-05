@@ -6,9 +6,9 @@ package redis
 // 	"strconv"
 
 // 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+// 	"github.com/bluesky-social/kvdb/internal/metrics"
 // 	"github.com/bluesky-social/kvdb/internal/types"
 // 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
-// 	"go.opentelemetry.io/otel/codes"
 // 	"google.golang.org/protobuf/proto"
 // 	"google.golang.org/protobuf/types/known/timestamppb"
 // )
@@ -49,7 +49,7 @@ package redis
 // 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 // 	}
 
-// 	span.SetStatus(codes.Ok, "llen handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatUint(num), nil
 // }
 
@@ -57,7 +57,7 @@ package redis
 // 	ctx, span := s.tracer.Start(ctx, "handleLPush")
 // 	defer span.End()
 
-// 	span.SetStatus(codes.Ok, "lpush handled")
+// 	metrics.SpanOK(span)
 // 	return s.handlePush(ctx, args, true)
 // }
 
@@ -65,7 +65,7 @@ package redis
 // 	ctx, span := s.tracer.Start(ctx, "handleRPush")
 // 	defer span.End()
 
-// 	span.SetStatus(codes.Ok, "rpush handled")
+// 	metrics.SpanOK(span)
 // 	return s.handlePush(ctx, args, false)
 // }
 
@@ -208,7 +208,7 @@ package redis
 // 		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
 // 	}
 
-// 	span.SetStatus(codes.Ok, "push handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatInt(int64(len(members))), nil
 // }
 
@@ -286,7 +286,7 @@ package redis
 // 	}
 
 // 	if bufAny == nil {
-// 		span.SetStatus(codes.Ok, "lindex handled")
+// 		metrics.SpanOK(span)
 // 		return resp.FormatNil(), nil
 // 	}
 
@@ -295,6 +295,6 @@ package redis
 // 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 // 	}
 
-// 	span.SetStatus(codes.Ok, "lindex handled")
+// 	metrics.SpanOK(span)
 // 	return resp.FormatBulkString(string(buf)), nil
 // }

@@ -21,7 +21,6 @@ import (
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -183,7 +182,7 @@ func (s *session) Serve(ctx context.Context) {
 		s.write(s.handleCommand(ctx, cmd))
 	}
 
-	span.SetStatus(codes.Ok, "session complete")
+	metrics.SpanOK(span)
 }
 
 // Returns the FDB key of an object in the global user directory
@@ -286,7 +285,7 @@ func (s *session) parseCommand(ctx context.Context, reader *bufio.Reader) (*resp
 		return nil, recordErr(span, err)
 	}
 
-	span.SetStatus(codes.Ok, "command parsed")
+	metrics.SpanOK(span)
 	return cmd, nil
 }
 
@@ -326,7 +325,7 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 	}
 	if res != "" {
 		status = metrics.StatusOK
-		span.SetStatus(codes.Ok, "command handled")
+		metrics.SpanOK(span)
 		return res
 	}
 
@@ -393,7 +392,7 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 	}
 
 	status = metrics.StatusOK
-	span.SetStatus(codes.Ok, "command handled")
+	metrics.SpanOK(span)
 	return res
 }
 
@@ -566,7 +565,7 @@ func (s *session) getMeta(ctx context.Context, tx fdb.ReadTransaction, id string
 	}
 
 	if len(metaBuf) == 0 {
-		span.SetStatus(codes.Ok, "getObject ok")
+		metrics.SpanOK(span)
 		return metaKey, nil, nil
 	}
 
@@ -576,7 +575,7 @@ func (s *session) getMeta(ctx context.Context, tx fdb.ReadTransaction, id string
 		return metaKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
 	}
 
-	span.SetStatus(codes.Ok, "getObjectMeta ok")
+	metrics.SpanOK(span)
 	return metaKey, meta, nil
 }
 
@@ -598,7 +597,7 @@ func (s *session) getListMeta(ctx context.Context, tx fdb.ReadTransaction, id st
 	}
 
 	if len(metaBuf) == 0 {
-		span.SetStatus(codes.Ok, "getList ok")
+		metrics.SpanOK(span)
 		return listKey, nil, nil
 	}
 
@@ -608,7 +607,7 @@ func (s *session) getListMeta(ctx context.Context, tx fdb.ReadTransaction, id st
 		return listKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
 	}
 
-	span.SetStatus(codes.Ok, "getListMeta ok")
+	metrics.SpanOK(span)
 	return listKey, meta, nil
 }
 
@@ -729,7 +728,7 @@ func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, memb
 		return 0, fmt.Errorf("failed to parse uid: %w", err)
 	}
 
-	span.SetStatus(codes.Ok, "getOrAllocateUID ok")
+	metrics.SpanOK(span)
 	return uid, nil
 }
 
@@ -761,7 +760,7 @@ func (s *session) peekUID(ctx context.Context, tx fdb.ReadTransaction, member st
 		return 0, fmt.Errorf("failed to parse uid: %w", err)
 	}
 
-	span.SetStatus(codes.Ok, "peekUID ok")
+	metrics.SpanOK(span)
 	return uid, nil
 }
 
@@ -787,7 +786,7 @@ func (s *session) memberFromUID(ctx context.Context, tx fdb.ReadTransaction, uid
 		return "", err
 	}
 
-	span.SetStatus(codes.Ok, "memberFromUID ok")
+	metrics.SpanOK(span)
 	return string(member), nil
 }
 

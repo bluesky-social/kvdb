@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
-	"go.opentelemetry.io/otel/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -24,13 +24,13 @@ func (s *session) getBasicObject(ctx context.Context, tx fdb.ReadTransaction, id
 		return nil, nil, err
 	}
 	if meta == nil {
-		span.SetStatus(codes.Ok, "getObject ok")
+		metrics.SpanOK(span)
 		return nil, nil, nil
 	}
 
 	basicObjMeta, ok := meta.Type.(*types.ObjectMeta_Basic)
 	if !ok {
-		err := fmt.Errorf("not a basic object")
+		err := fmt.Errorf("item is not a basic object")
 		span.RecordError(err)
 		return nil, nil, err
 	}
@@ -55,7 +55,7 @@ func (s *session) getBasicObject(ctx context.Context, tx fdb.ReadTransaction, id
 		buf = append(buf, chunk...)
 	}
 
-	span.SetStatus(codes.Ok, "getObject ok")
+	metrics.SpanOK(span)
 	return meta, buf, nil
 }
 
@@ -126,7 +126,7 @@ func (s *session) writeBasicObject(ctx context.Context, tx fdb.Transaction, id s
 		tx.Set(chunkKey, data[start:end])
 	}
 
-	span.SetStatus(codes.Ok, "writeObject ok")
+	metrics.SpanOK(span)
 	return nil
 }
 
@@ -162,7 +162,7 @@ func (s *session) deleteBasicObject(ctx context.Context, tx fdb.Transaction, id 
 		})
 	}
 
-	span.SetStatus(codes.Ok, "deleteObject ok")
+	metrics.SpanOK(span)
 	return nil
 }
 
@@ -197,7 +197,7 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 		res = resp.FormatBulkString(string(buf))
 	}
 
-	span.SetStatus(codes.Ok, "get handled")
+	metrics.SpanOK(span)
 	return res, nil
 }
 
@@ -230,7 +230,7 @@ func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, fmt.Errorf("failed to cast result value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "exists handled")
+	metrics.SpanOK(span)
 	return resp.FormatBoolAsInt(exists), nil
 }
 
@@ -259,7 +259,7 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "set handled")
+	metrics.SpanOK(span)
 	return resp.FormatSimpleString("OK"), nil
 }
 
@@ -301,7 +301,7 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, err)
 	}
 
-	span.SetStatus(codes.Ok, "delete handled")
+	metrics.SpanOK(span)
 	return resp.FormatBoolAsInt(exists), nil
 }
 
@@ -314,7 +314,7 @@ func (s *session) handleIncr(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "incr handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(res), nil
 }
 
@@ -336,7 +336,7 @@ func (s *session) handleIncrBy(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "incrby handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(res), nil
 }
 
@@ -349,7 +349,7 @@ func (s *session) handleDecr(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "decr handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(res), nil
 }
 
@@ -378,7 +378,7 @@ func (s *session) handleDecrBy(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "decrby handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(res), nil
 }
 
@@ -432,7 +432,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 		return 0, recordErr(span, err)
 	}
 
-	span.SetStatus(codes.Ok, "incr decr handled")
+	metrics.SpanOK(span)
 	return res, nil
 }
 
@@ -491,6 +491,6 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, recordErr(span, err))
 	}
 
-	span.SetStatus(codes.Ok, "incrbyfloat handled")
+	metrics.SpanOK(span)
 	return resp.FormatBulkString(string(res)), nil
 }
