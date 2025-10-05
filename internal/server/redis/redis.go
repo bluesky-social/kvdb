@@ -131,6 +131,15 @@ func InitAdminUser(db fdb.Database, dirs *Directories, username, password string
 	return nil
 }
 
+func InitBackgroundServices(ctx context.Context, db fdb.Database, dirs *Directories) {
+	sess := NewSession(&NewSessionArgs{
+		FDB:  db,
+		Dirs: dirs,
+	})
+
+	go sess.deleteExpiredObjectsForever(ctx)
+}
+
 type session struct {
 	log    *slog.Logger
 	tracer trace.Tracer
@@ -175,8 +184,6 @@ func NewSession(args *NewSessionArgs) *session {
 }
 
 func (s *session) Serve(ctx context.Context) {
-	go s.handleExpiringEntries(ctx)
-
 	ctx, span := s.tracer.Start(ctx, "Serve")
 	defer span.End()
 
@@ -812,8 +819,8 @@ func parseVariadicArguments(args []resp.Value) ([]string, error) {
 	return members, nil
 }
 
-func (s *session) handleExpiringEntries(ctx context.Context) {
-	ctx, span := s.tracer.Start(ctx, "handleExpiringEntries")
+func (s *session) deleteExpiredObjectsForever(ctx context.Context) {
+	ctx, span := s.tracer.Start(ctx, "deleteExpireObjectsForever")
 	defer span.End()
 
 	ticker := time.NewTicker(250 * time.Millisecond)
@@ -822,7 +829,7 @@ func (s *session) handleExpiringEntries(ctx context.Context) {
 	const batchSize = 1000
 
 	for {
-		numDeleted, err := s.handleExpiringObjectBatch(ctx, batchSize)
+		numDeleted, err := s.deleteOneExpiredObjectBatch(ctx, batchSize)
 		if err != nil {
 			s.log.Error("failed to delete expired object batch", "err", err)
 			continue
@@ -845,12 +852,13 @@ func (s *session) handleExpiringEntries(ctx context.Context) {
 	}
 }
 
-func (s *session) handleExpiringObjectBatch(ctx context.Context, limit int) (int, error) {
-	ctx, span := s.tracer.Start(ctx, "handleExpiringObjectBatch")
+func (s *session) deleteOneExpiredObjectBatch(ctx context.Context, limit int) (int, error) {
+	ctx, span := s.tracer.Start(ctx, "deleteOneExpiredObjectBatch")
 	defer span.End()
 
 	log := s.log.WithGroup("expiration")
 
+	now := time.Now()
 	deletedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		// get up to `limit` objects that are ready to expire
 		begin, end := s.dirs.expire.FDBRangeKeys()
@@ -866,6 +874,24 @@ func (s *session) handleExpiringObjectBatch(ctx context.Context, limit int) (int
 				return 0, fmt.Errorf("failed to iterate over key range: %w", err)
 			}
 
+			meta := &types.ObjectMeta{}
+			if err := proto.Unmarshal(kv.Value, meta); err != nil {
+				tx.Clear(kv.Key)
+				log.Error("failed to proto unmarshal object meta", "err", err)
+				continue
+			}
+
+			if meta.Expires == nil {
+				// item is not expiring - should be unreachable
+				tx.Clear(kv.Key)
+				continue
+			}
+
+			if now.Before(meta.Expires.AsTime()) {
+				// the item hasn't expired yet, don't delete it
+				continue
+			}
+
 			tx.Clear(kv.Key)
 
 			tup, err := s.dirs.expire.Unpack(kv.Key)
@@ -873,18 +899,32 @@ func (s *session) handleExpiringObjectBatch(ctx context.Context, limit int) (int
 				log.Error("failed to unpack tuple", "err", err)
 				continue
 			}
-			if len(tup) != 1 {
+			if len(tup) != 2 {
 				log.Error("malformed key tuple", "err", "invalid length")
 				continue
 			}
 
-			key, err := cast[string](tup[0])
+			username, err := cast[string](tup[0])
+			if err != nil {
+				log.Error("invalid tuple user type", "err", err)
+				continue
+			}
+
+			key, err := cast[string](tup[1])
 			if err != nil {
 				log.Error("invalid tuple key type", "err", err)
 				continue
 			}
 
-			if err := s.deleteObject(ctx, tx, key, nil); err != nil {
+			// @NOTE (jrc): this is a bit of a hack to ensure that we can actually
+			// make use of the appropriate per-user FDB directories we require to
+			// actually delete objects
+			if err := s.setSessionUser(&types.User{Username: username}); err != nil {
+				log.Error("failed to set session user", "err", err)
+				continue
+			}
+
+			if err := s.deleteObject(ctx, tx, key, meta); err != nil {
 				log.Error("failed to delete expiring object", "err", err)
 				continue
 			}

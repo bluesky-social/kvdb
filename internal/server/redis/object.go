@@ -598,7 +598,7 @@ func (s *session) handleExpire(ctx context.Context, args []resp.Value) (string, 
 		}
 
 		// create a bookkeeping entry so we know when to permanently delete the object from foundation
-		expiringKey := s.dirs.expire.Pack(tuple.Tuple{key})
+		expiringKey := s.dirs.expire.Pack(tuple.Tuple{s.user.user.Username, key})
 		if err := setProtoItem(tx, expiringKey, meta); err != nil {
 			return 0, fmt.Errorf("failed to write expiring object: %w", err)
 		}
