@@ -78,35 +78,43 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 		return resp.FormatError(errInvalidCredentials), nil
 	}
 
-	// set the user directory on the session
+	if err := s.setSessionUser(user); err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to set session user: %w", err))
+	}
+
+	metrics.SpanOK(span)
+	return resp.FormatSimpleString("OK"), nil
+}
+
+func (s *session) setSessionUser(user *types.User) error {
 	userDir, err := s.dirs.redis.CreateOrOpen(s.fdb, []string{user.Username}, nil)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to initialize user directory: %w", err))
+		return fmt.Errorf("failed to initialize user directory: %w", err)
 	}
 
 	objDir, err := userDir.CreateOrOpen(s.fdb, []string{"obj"}, nil)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to initialize user object directory: %w", err))
+		return fmt.Errorf("failed to initialize user object directory: %w", err)
 	}
 
 	metaDir, err := userDir.CreateOrOpen(s.fdb, []string{"meta"}, nil)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to initialize user meta directory: %w", err))
+		return fmt.Errorf("failed to initialize user meta directory: %w", err)
 	}
 
 	uidDir, err := userDir.CreateOrOpen(s.fdb, []string{"uid"}, nil)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to initialize user uid directory: %w", err))
+		return fmt.Errorf("failed to initialize user uid directory: %w", err)
 	}
 
 	reverseUIDDir, err := userDir.CreateOrOpen(s.fdb, []string{"ruid"}, nil)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to initialize user reverse uid directory: %w", err))
+		return fmt.Errorf("failed to initialize user reverse uid directory: %w", err)
 	}
 
 	listDir, err := userDir.CreateOrOpen(s.fdb, []string{"list"}, nil)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to initialize user list directory: %w", err))
+		return fmt.Errorf("failed to initialize user list directory: %w", err)
 	}
 
 	s.userMu.Lock()
@@ -120,8 +128,7 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 	}
 	s.userMu.Unlock()
 
-	metrics.SpanOK(span)
-	return resp.FormatSimpleString("OK"), nil
+	return nil
 }
 
 // Implements a small subset of the standard redis functionality for creating a new user.

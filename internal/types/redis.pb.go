@@ -207,6 +207,7 @@ type ObjectMeta struct {
 	Created    *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=created,proto3" json:"created,omitempty"`
 	Updated    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
 	LastAccess *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_access,json=lastAccess,proto3" json:"last_access,omitempty"`
+	Expires    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires,proto3,oneof" json:"expires,omitempty"`
 	// Types that are valid to be assigned to Type:
 	//
 	//	*ObjectMeta_Basic
@@ -269,6 +270,13 @@ func (x *ObjectMeta) GetLastAccess() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ObjectMeta) GetExpires() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Expires
+	}
+	return nil
+}
+
 func (x *ObjectMeta) GetType() isObjectMeta_Type {
 	if x != nil {
 		return x.Type
@@ -317,19 +325,19 @@ type isObjectMeta_Type interface {
 }
 
 type ObjectMeta_Basic struct {
-	Basic *BasicObjectMeta `protobuf:"bytes,4,opt,name=basic,proto3,oneof"`
+	Basic *BasicObjectMeta `protobuf:"bytes,5,opt,name=basic,proto3,oneof"`
 }
 
 type ObjectMeta_Set struct {
-	Set *SetMeta `protobuf:"bytes,5,opt,name=set,proto3,oneof"`
+	Set *SetMeta `protobuf:"bytes,6,opt,name=set,proto3,oneof"`
 }
 
 type ObjectMeta_List struct {
-	List *ListMeta `protobuf:"bytes,6,opt,name=list,proto3,oneof"`
+	List *ListMeta `protobuf:"bytes,7,opt,name=list,proto3,oneof"`
 }
 
 type ObjectMeta_ListItem struct {
-	ListItem *ListItemMeta `protobuf:"bytes,7,opt,name=list_item,json=listItem,proto3,oneof"`
+	ListItem *ListItemMeta `protobuf:"bytes,8,opt,name=list_item,json=listItem,proto3,oneof"`
 }
 
 func (*ObjectMeta_Basic) isObjectMeta_Type() {}
@@ -602,18 +610,21 @@ const file_redis_proto_rawDesc = "" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\x12(\n" +
 	"\x05rules\x18\x06 \x03(\v2\x12.types.UserACLRuleR\x05rules\";\n" +
 	"\vUserACLRule\x12,\n" +
-	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xec\x02\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xb3\x03\n" +
 	"\n" +
 	"ObjectMeta\x124\n" +
 	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
 	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x12;\n" +
 	"\vlast_access\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastAccess\x12.\n" +
-	"\x05basic\x18\x04 \x01(\v2\x16.types.BasicObjectMetaH\x00R\x05basic\x12\"\n" +
-	"\x03set\x18\x05 \x01(\v2\x0e.types.SetMetaH\x00R\x03set\x12%\n" +
-	"\x04list\x18\x06 \x01(\v2\x0f.types.ListMetaH\x00R\x04list\x122\n" +
-	"\tlist_item\x18\a \x01(\v2\x13.types.ListItemMetaH\x00R\blistItemB\x06\n" +
-	"\x04type\"O\n" +
+	"lastAccess\x129\n" +
+	"\aexpires\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampH\x01R\aexpires\x88\x01\x01\x12.\n" +
+	"\x05basic\x18\x05 \x01(\v2\x16.types.BasicObjectMetaH\x00R\x05basic\x12\"\n" +
+	"\x03set\x18\x06 \x01(\v2\x0e.types.SetMetaH\x00R\x03set\x12%\n" +
+	"\x04list\x18\a \x01(\v2\x0f.types.ListMetaH\x00R\x04list\x122\n" +
+	"\tlist_item\x18\b \x01(\v2\x13.types.ListItemMetaH\x00R\blistItemB\x06\n" +
+	"\x04typeB\n" +
+	"\n" +
+	"\b_expires\"O\n" +
 	"\x0fBasicObjectMeta\x12\x1d\n" +
 	"\n" +
 	"num_chunks\x18\x01 \x01(\rR\tnumChunks\x12\x1d\n" +
@@ -676,15 +687,16 @@ var file_redis_proto_depIdxs = []int32{
 	8,  // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
 	8,  // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
 	8,  // 6: types.ObjectMeta.last_access:type_name -> google.protobuf.Timestamp
-	4,  // 7: types.ObjectMeta.basic:type_name -> types.BasicObjectMeta
-	5,  // 8: types.ObjectMeta.set:type_name -> types.SetMeta
-	6,  // 9: types.ObjectMeta.list:type_name -> types.ListMeta
-	7,  // 10: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	8,  // 7: types.ObjectMeta.expires:type_name -> google.protobuf.Timestamp
+	4,  // 8: types.ObjectMeta.basic:type_name -> types.BasicObjectMeta
+	5,  // 9: types.ObjectMeta.set:type_name -> types.SetMeta
+	6,  // 10: types.ObjectMeta.list:type_name -> types.ListMeta
+	7,  // 11: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_redis_proto_init() }

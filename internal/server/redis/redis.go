@@ -32,6 +32,10 @@ type Directories struct {
 
 	// The directory that contiains information on database suers
 	user directory.DirectorySubspace
+
+	// The directory that contiains information on entries that are set to expire so
+	// we can clean them up
+	expire directory.DirectorySubspace
 }
 
 func InitDirectories(db fdb.Database) (dir *Directories, err error) {
@@ -45,6 +49,11 @@ func InitDirectories(db fdb.Database) (dir *Directories, err error) {
 	dir.user, err = dir.redis.CreateOrOpen(db, []string{"_user"}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user directory: %w", err)
+	}
+
+	dir.expire, err = dir.redis.CreateOrOpen(db, []string{"_expire"}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create expire directory: %w", err)
 	}
 
 	return
@@ -120,6 +129,15 @@ func InitAdminUser(db fdb.Database, dirs *Directories, username, password string
 	}
 
 	return nil
+}
+
+func InitBackgroundServices(ctx context.Context, db fdb.Database, dirs *Directories) {
+	sess := NewSession(&NewSessionArgs{
+		FDB:  db,
+		Dirs: dirs,
+	})
+
+	go sess.deleteExpiredObjectsForever(ctx)
 }
 
 type session struct {
@@ -346,6 +364,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleDecr(ctx, cmd.Args)
 	case "decrby":
 		res, err = s.handleDecrBy(ctx, cmd.Args)
+	case "expire":
+		res, err = s.handleExpire(ctx, cmd.Args)
 	case "sadd":
 		res, err = s.handleSetAdd(ctx, cmd.Args)
 	case "srem":
@@ -797,4 +817,134 @@ func parseVariadicArguments(args []resp.Value) ([]string, error) {
 	}
 
 	return members, nil
+}
+
+func (s *session) deleteExpiredObjectsForever(ctx context.Context) {
+	ctx, span := s.tracer.Start(ctx, "deleteExpireObjectsForever")
+	defer span.End()
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	const batchSize = 1000
+
+	for {
+		numDeleted, err := s.deleteOneExpiredObjectBatch(ctx, batchSize)
+		if err != nil {
+			s.log.Error("failed to delete expired object batch", "err", err)
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			metrics.SpanOK(span)
+			return
+		default:
+		}
+
+		if numDeleted == batchSize {
+			// we processed a full batch, try again right away
+			continue
+		}
+
+		// wait and process again
+		<-ticker.C
+	}
+}
+
+func (s *session) deleteOneExpiredObjectBatch(ctx context.Context, limit int) (int, error) {
+	ctx, span := s.tracer.Start(ctx, "deleteOneExpiredObjectBatch")
+	defer span.End()
+
+	log := s.log.WithGroup("expiration")
+
+	now := time.Now()
+	deletedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// get up to `limit` objects that are ready to expire
+		begin, end := s.dirs.expire.FDBRangeKeys()
+		rangeResult := tx.GetRange(fdb.KeyRange{Begin: begin, End: end}, fdb.RangeOptions{
+			Limit: limit,
+		})
+
+		count := 0
+		it := rangeResult.Iterator()
+		for it.Advance() {
+			kv, err := it.Get()
+			if err != nil {
+				return 0, fmt.Errorf("failed to iterate over key range: %w", err)
+			}
+
+			meta := &types.ObjectMeta{}
+			if err := proto.Unmarshal(kv.Value, meta); err != nil {
+				tx.Clear(kv.Key)
+				log.Error("failed to proto unmarshal object meta", "err", err)
+				continue
+			}
+
+			if meta.Expires == nil {
+				// item is not expiring - should be unreachable
+				tx.Clear(kv.Key)
+				continue
+			}
+
+			if now.Before(meta.Expires.AsTime()) {
+				// the item hasn't expired yet, don't delete it
+				continue
+			}
+
+			tx.Clear(kv.Key)
+
+			tup, err := s.dirs.expire.Unpack(kv.Key)
+			if err != nil {
+				log.Error("failed to unpack tuple", "err", err)
+				continue
+			}
+			if len(tup) != 2 {
+				log.Error("malformed key tuple", "err", "invalid length")
+				continue
+			}
+
+			username, err := cast[string](tup[0])
+			if err != nil {
+				log.Error("invalid tuple user type", "err", err)
+				continue
+			}
+
+			key, err := cast[string](tup[1])
+			if err != nil {
+				log.Error("invalid tuple key type", "err", err)
+				continue
+			}
+
+			// @NOTE (jrc): this is a bit of a hack to ensure that we can actually
+			// make use of the appropriate per-user FDB directories we require to
+			// actually delete objects
+			if err := s.setSessionUser(&types.User{Username: username}); err != nil {
+				log.Error("failed to set session user", "err", err)
+				continue
+			}
+
+			if err := s.deleteObject(ctx, tx, key, meta); err != nil {
+				log.Error("failed to delete expiring object", "err", err)
+				continue
+			}
+
+			count += 1
+		}
+
+		return count, nil
+	})
+	if err != nil {
+		span.RecordError(err)
+		return 0, err
+	}
+
+	deleted, err := cast[int](deletedAny)
+	if err != nil {
+		span.RecordError(err)
+		return 0, err
+	}
+
+	metrics.SpanOK(span)
+	return deleted, nil
 }
