@@ -9,6 +9,7 @@ import (
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/bluesky-social/kvdb/internal/testutil"
+	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -1096,4 +1097,21 @@ func TestExpire(t *testing.T) {
 	})
 	require.Equal(resp.FormatInt(1), res)
 	check(false)
+
+	// ensure the underlying object is actually deleted
+	var (
+		meta *types.ObjectMeta
+		buf  []byte
+	)
+	_, err := sess.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		var err error
+		meta, buf, err = sess.getObject(ctx, tx, objectKindBasic, key)
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	require.NoError(err)
+	require.Nil(meta)
+	require.Empty(buf)
 }
