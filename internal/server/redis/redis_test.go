@@ -1040,3 +1040,60 @@ func TestLists(t *testing.T) {
 	})
 	require.Equal(resp.FormatBulkString(val3), res)
 }
+
+func TestExpire(t *testing.T) {
+	require := require.New(t)
+	ctx := t.Context()
+	sess := testSessionWithAuth(t)
+
+	key := testutil.RandString(24)
+	val := "test val"
+
+	// create an entry
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "SET",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.SimpleStringValue(val),
+		},
+	})
+	require.Equal(resp.FormatSimpleString("OK"), res)
+
+	check := func(exists bool) {
+		res = sess.handleCommand(ctx, &resp.Command{
+			Name: "GET",
+			Args: []resp.Value{resp.SimpleStringValue(key)},
+		})
+		if exists {
+			require.Equal(resp.FormatBulkString(val), res)
+		} else {
+			require.Equal(resp.FormatNil(), res)
+		}
+	}
+
+	// check that is was created successfully
+	check(true)
+
+	// set an expiration of that should not expire the
+	// object for a long time (one million seconds)
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "EXPIRE",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.SimpleStringValue("1000000"),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+	check(true)
+
+	// set an expiration of -1, which should immediately expire the object
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "EXPIRE",
+		Args: []resp.Value{
+			resp.SimpleStringValue(key),
+			resp.SimpleStringValue("-1"),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+	check(false)
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/bluesky-social/kvdb/internal/metrics"
@@ -73,7 +74,13 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, kind ob
 	}
 
 	// @TODO (jrc): update last_accessed out of band
-	// @TODO (jrc): read all chunks in parallel
+
+	if meta.Expires != nil {
+		if time.Now().After(meta.Expires.AsTime()) {
+			metrics.SpanOK(span)
+			return nil, nil, nil
+		}
+	}
 
 	numChunks, err := getNumChunks(meta, gt.Some(kind))
 	if err != nil {
@@ -81,6 +88,7 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, kind ob
 		return nil, nil, err
 	}
 
+	// @TODO (jrc): read all chunks in parallel
 	buf := []byte{}
 	for ndx := range numChunks {
 		chunkKey, err := s.objectKey(id, ndx)
@@ -456,7 +464,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		_, buf, err := s.getObject(ctx, tx, objectKindBasic, key)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get existing value")
+			return nil, fmt.Errorf("failed to get existing value: %w", err)
 		}
 		if len(buf) == 0 {
 			buf = []byte("0") // create a new value
@@ -506,7 +514,6 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse increment argument: %w", err))
 	}
-
 	by, err := strconv.ParseFloat(byStr, 64)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("invalid increment %q: %w", byStr, err))
@@ -515,7 +522,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
 		_, buf, err := s.getObject(ctx, tx, objectKindBasic, key)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get existing value")
+			return nil, fmt.Errorf("failed to get existing value: %w", err)
 		}
 		if len(buf) == 0 {
 			buf = []byte("0") // create a new value
@@ -546,4 +553,59 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 
 	metrics.SpanOK(span)
 	return resp.FormatBulkString(string(res)), nil
+}
+
+func (s *session) handleExpire(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleExpire")
+	defer span.End()
+
+	if err := validateNumArgs(args, 2); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse key argument: %w", err))
+	}
+
+	secsStr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse expire seconds argument: %w", err))
+	}
+	secs, err := strconv.ParseInt(secsStr, 10, 64)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid expire seconds %q: %w", secsStr, err))
+	}
+	delta := time.Duration(secs) * time.Second
+
+	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		metaKey, meta, err := s.getObjectMeta(ctx, tx, key)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get object meta: %w", err)
+		}
+		if meta == nil {
+			// no item exists, no expiry will be set
+			return 0, nil
+		}
+
+		now := timestamppb.Now().AsTime()
+		meta.Expires = timestamppb.New(now.Add(delta))
+
+		if err := setProtoItem(tx, metaKey, meta); err != nil {
+			return 0, fmt.Errorf("failed to write object meta: %w", err)
+		}
+
+		return 1, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to delete value: %w", err))
+	}
+
+	res, err := cast[int](resAny)
+	if err != nil {
+		return "", recordErr(span, recordErr(span, err))
+	}
+
+	metrics.SpanOK(span)
+	return resp.FormatInt(int64(res)), nil
 }

@@ -346,6 +346,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleDecr(ctx, cmd.Args)
 	case "decrby":
 		res, err = s.handleDecrBy(ctx, cmd.Args)
+	case "expire":
+		res, err = s.handleExpire(ctx, cmd.Args)
 	case "sadd":
 		res, err = s.handleSetAdd(ctx, cmd.Args)
 	case "srem":
