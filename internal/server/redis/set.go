@@ -46,7 +46,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 		}
 
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(ctx, tx, key)
+		_, blob, err := s.getObject(ctx, tx, objectKindSet, key)
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -76,7 +76,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
 
-		if err = s.writeObject(ctx, tx, key, data); err != nil {
+		if err = s.writeObject(ctx, tx, key, objectKindSet, data); err != nil {
 			return int64(0), fmt.Errorf("failed to write set: %w", err)
 		}
 
@@ -130,7 +130,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 		}
 
 		// get the bitmap if it exists
-		objMeta, blob, err := s.getObject(ctx, tx, key)
+		objMeta, blob, err := s.getObject(ctx, tx, objectKindSet, key)
 		if err != nil {
 			return int64(0), fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -168,7 +168,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 		}
 
-		if err = s.writeObject(ctx, tx, key, data); err != nil {
+		if err = s.writeObject(ctx, tx, key, objectKindSet, data); err != nil {
 			return int64(0), fmt.Errorf("failed to write set: %w", err)
 		}
 
@@ -218,7 +218,7 @@ func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (str
 		}
 
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(ctx, tx, key)
+		_, blob, err := s.getObject(ctx, tx, objectKindSet, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -266,7 +266,7 @@ func (s *session) handleSetCard(ctx context.Context, args []resp.Value) (string,
 
 	blobAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(ctx, tx, key)
+		_, blob, err := s.getObject(ctx, tx, objectKindSet, key)
 		if err != nil {
 			return uint64(0), fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -310,7 +310,7 @@ func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (stri
 
 	membersAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
 		// get the bitmap if it exists
-		_, blob, err := s.getObject(ctx, tx, key)
+		_, blob, err := s.getObject(ctx, tx, objectKindSet, key)
 		if err != nil {
 			return []string{}, fmt.Errorf("failed to get existing set: %w", err)
 		}
@@ -448,7 +448,7 @@ func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value
 				}
 			}()
 
-			_, blob, err = s.getObject(ctx, tx, skey)
+			_, blob, err = s.getObject(ctx, tx, objectKindSet, skey)
 			return
 		})
 		if err != nil {

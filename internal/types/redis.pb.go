@@ -342,8 +342,8 @@ func (*ObjectMeta_ListItem) isObjectMeta_Type() {}
 
 type BasicObjectMeta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	NumChunks     uint32                 `protobuf:"varint,4,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
-	SizeBytes     uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	NumChunks     uint32                 `protobuf:"varint,1,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
+	SizeBytes     uint64                 `protobuf:"varint,2,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -517,6 +517,8 @@ type ListItemMeta struct {
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Next          string                 `protobuf:"bytes,2,opt,name=next,proto3" json:"next,omitempty"`
 	Previous      string                 `protobuf:"bytes,3,opt,name=previous,proto3" json:"previous,omitempty"`
+	NumChunks     uint32                 `protobuf:"varint,4,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
+	SizeBytes     uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -572,6 +574,20 @@ func (x *ListItemMeta) GetPrevious() string {
 	return ""
 }
 
+func (x *ListItemMeta) GetNumChunks() uint32 {
+	if x != nil {
+		return x.NumChunks
+	}
+	return 0
+}
+
+func (x *ListItemMeta) GetSizeBytes() uint64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
 var File_redis_proto protoreflect.FileDescriptor
 
 const file_redis_proto_rawDesc = "" +
@@ -600,9 +616,9 @@ const file_redis_proto_rawDesc = "" +
 	"\x04type\"O\n" +
 	"\x0fBasicObjectMeta\x12\x1d\n" +
 	"\n" +
-	"num_chunks\x18\x04 \x01(\rR\tnumChunks\x12\x1d\n" +
+	"num_chunks\x18\x01 \x01(\rR\tnumChunks\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\"d\n" +
+	"size_bytes\x18\x02 \x01(\x04R\tsizeBytes\"d\n" +
 	"\aSetMeta\x12\x1b\n" +
 	"\tnum_items\x18\x01 \x01(\x04R\bnumItems\x12\x1d\n" +
 	"\n" +
@@ -612,11 +628,15 @@ const file_redis_proto_rawDesc = "" +
 	"\bListMeta\x12\x1b\n" +
 	"\tnum_items\x18\x01 \x01(\x04R\bnumItems\x12\x1b\n" +
 	"\titem_head\x18\x02 \x01(\tR\bitemHead\x12\x1b\n" +
-	"\titem_tail\x18\x03 \x01(\tR\bitemTail\"N\n" +
+	"\titem_tail\x18\x03 \x01(\tR\bitemTail\"\x8c\x01\n" +
 	"\fListItemMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04next\x18\x02 \x01(\tR\x04next\x12\x1a\n" +
-	"\bprevious\x18\x03 \x01(\tR\bprevious*\x97\x01\n" +
+	"\bprevious\x18\x03 \x01(\tR\bprevious\x12\x1d\n" +
+	"\n" +
+	"num_chunks\x18\x04 \x01(\rR\tnumChunks\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
 	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +

@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,11 +11,54 @@ import (
 	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
+	"github.com/jcalabro/gt"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
+type objectKind int64
+
+const (
+	objectKindBasic objectKind = 1 << iota
+	objectKindSet
+	objectKindList
+	objectKindListItem
+)
+
+var (
+	errWrongKind = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+)
+
+func getNumChunks(meta *types.ObjectMeta, kind gt.Option[objectKind]) (uint32, error) {
+	var (
+		numChunks uint32
+		objKind   objectKind
+	)
+
+	switch typ := meta.Type.(type) {
+	case *types.ObjectMeta_Basic:
+		objKind = objectKindBasic
+		numChunks = typ.Basic.NumChunks
+	case *types.ObjectMeta_Set:
+		objKind = objectKindSet
+		numChunks = typ.Set.NumChunks
+	case *types.ObjectMeta_ListItem:
+		objKind = objectKindListItem
+		numChunks = typ.ListItem.NumChunks
+	default:
+		return 0, fmt.Errorf("object of type %T cannot be retrieved by getObject", meta.Type)
+	}
+
+	if kind.HasVal() {
+		if kind.Val() != objKind {
+			return 0, errWrongKind
+		}
+	}
+
+	return numChunks, nil
+}
+
+func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, kind objectKind, id string) (*types.ObjectMeta, []byte, error) {
 	ctx, span := s.tracer.Start(ctx, "getObject")
 	defer span.End()
 
@@ -31,14 +75,8 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id stri
 	// @TODO (jrc): update last_accessed out of band
 	// @TODO (jrc): read all chunks in parallel
 
-	var numChunks uint32
-	switch typ := meta.Type.(type) {
-	case *types.ObjectMeta_Basic:
-		numChunks = typ.Basic.NumChunks
-	case *types.ObjectMeta_Set:
-		numChunks = typ.Set.NumChunks
-	default:
-		err := fmt.Errorf("object of type %T cannot be retreived by getObject", meta.Type)
+	numChunks, err := getNumChunks(meta, gt.Some(kind))
+	if err != nil {
 		span.RecordError(err)
 		return nil, nil, err
 	}
@@ -64,7 +102,7 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id stri
 	return meta, buf, nil
 }
 
-func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
+func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string, kind objectKind, data []byte) error {
 	ctx, span := s.tracer.Start(ctx, "writeObject")
 	defer span.End()
 
@@ -86,27 +124,35 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 		// create new
 		meta = &types.ObjectMeta{
 			Created: now,
-			Type: &types.ObjectMeta_Basic{
-				Basic: &types.BasicObjectMeta{},
-			},
+		}
+		switch kind {
+		case objectKindBasic:
+			meta.Type = &types.ObjectMeta_Basic{Basic: &types.BasicObjectMeta{}}
+		case objectKindSet:
+			meta.Type = &types.ObjectMeta_Set{Set: &types.SetMeta{}}
+		case objectKindListItem:
+			meta.Type = &types.ObjectMeta_ListItem{ListItem: &types.ListItemMeta{}}
 		}
 	}
 
 	meta.Updated = now
 	meta.LastAccess = now
 
-	basicObjMeta, ok := meta.Type.(*types.ObjectMeta_Basic)
-	if !ok {
-		err := fmt.Errorf("not a basic object")
-		span.RecordError(err)
-		return err
-	}
-
+	// set the new number of chunks
 	const maxValBytes = 100_000
 	length := uint32(len(data))
-	basicObjMeta.Basic.NumChunks = (length / maxValBytes) + 1
+	numChunks := (length / maxValBytes) + 1
 	if length%maxValBytes == 0 {
-		basicObjMeta.Basic.NumChunks = length / maxValBytes
+		numChunks = length / maxValBytes
+	}
+
+	switch typ := meta.Type.(type) {
+	case *types.ObjectMeta_Basic:
+		typ.Basic.NumChunks = numChunks
+	case *types.ObjectMeta_Set:
+		typ.Set.NumChunks = numChunks
+	case *types.ObjectMeta_ListItem:
+		typ.ListItem.NumChunks = numChunks
 	}
 
 	// write the meta object
@@ -118,7 +164,7 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 	tx.Set(metaKey, metaBuf)
 
 	// write all object data chunks
-	for ndx := range basicObjMeta.Basic.NumChunks {
+	for ndx := range numChunks {
 		start := ndx * maxValBytes
 		end := min((ndx+1)*maxValBytes, length)
 
@@ -147,25 +193,27 @@ func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id strin
 	}
 	tx.Clear(metaKey)
 
-	// @TODO (jrc): support cascade deleteing lists and sets
-	switch typ := meta.Type.(type) {
-	case *types.ObjectMeta_Basic:
-		// clear all object chunks
-		begin, err := s.objectKey(id, 0)
-		if err != nil {
-			span.RecordError(err)
-			return fmt.Errorf("failed to get object begin key: %w", err)
-		}
-		end, err := s.objectKey(id, typ.Basic.NumChunks-1)
-		if err != nil {
-			span.RecordError(err)
-			return fmt.Errorf("failed to get object start key: %w", err)
-		}
-		tx.ClearRange(fdb.KeyRange{
-			Begin: begin,
-			End:   end,
-		})
+	numChunks, err := getNumChunks(meta, gt.None[objectKind]())
+	if err != nil {
+		span.RecordError(err)
+		return err
 	}
+
+	// clear all object chunks
+	begin, err := s.objectKey(id, 0)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to get object begin key: %w", err)
+	}
+	end, err := s.objectKey(id, numChunks-1)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to get object start key: %w", err)
+	}
+	tx.ClearRange(fdb.KeyRange{
+		Begin: begin,
+		End:   end,
+	})
 
 	metrics.SpanOK(span)
 	return nil
@@ -185,7 +233,7 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	bufAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		_, buf, err := s.getObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, objectKindBasic, key)
 		return buf, err
 	})
 	if err != nil {
@@ -258,7 +306,7 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		return nil, s.writeObject(ctx, tx, key, []byte(val))
+		return nil, s.writeObject(ctx, tx, key, objectKindBasic, []byte(val))
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
@@ -406,7 +454,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 	}
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, buf, err := s.getObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, objectKindBasic, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
@@ -422,7 +470,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 		num += by
 
 		buf = []byte(strconv.FormatInt(num, 10))
-		if err = s.writeObject(ctx, tx, key, buf); err != nil {
+		if err = s.writeObject(ctx, tx, key, objectKindBasic, buf); err != nil {
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 
@@ -465,7 +513,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 	}
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, buf, err := s.getObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, objectKindBasic, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
@@ -481,7 +529,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 		num += by
 
 		buf = []byte(strconv.FormatFloat(num, 'g', -1, 64))
-		if err = s.writeObject(ctx, tx, key, buf); err != nil {
+		if err = s.writeObject(ctx, tx, key, objectKindBasic, buf); err != nil {
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 

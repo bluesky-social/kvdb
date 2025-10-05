@@ -38,8 +38,8 @@ message ObjectMeta {
 }
 
 message BasicObjectMeta {
-  uint32 num_chunks = 4;
-  uint64 size_bytes = 5;
+  uint32 num_chunks = 1;
+  uint64 size_bytes = 2;
 }
 
 message SetMeta {
@@ -58,4 +58,6 @@ message ListItemMeta {
   string id = 1;
   string next = 2;
   string previous = 3;
+  uint32 num_chunks = 4;
+  uint64 size_bytes = 5;
 }

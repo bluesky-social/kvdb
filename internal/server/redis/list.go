@@ -216,7 +216,7 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 			}
 
 			// save the list item object blob
-			if err := s.writeObject(ctx, tx, itemID, []byte(member)); err != nil {
+			if err := s.writeObject(ctx, tx, itemID, objectKindListItem, []byte(member)); err != nil {
 				return nil, fmt.Errorf("failed to create list item: %w", err)
 			}
 		}
@@ -301,7 +301,7 @@ func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, 
 			objKey = listItemMeta.ListItem.Next
 		}
 
-		_, buf, err := s.getObject(ctx, tx, objKey)
+		_, buf, err := s.getObject(ctx, tx, objectKindListItem, objKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object payload: %w", err)
 		}
