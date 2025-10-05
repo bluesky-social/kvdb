@@ -7,9 +7,164 @@ import (
 	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel/codes"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func (s *session) getBasicObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
+	ctx, span := s.tracer.Start(ctx, "getBasicObject")
+	defer span.End()
+
+	_, meta, err := s.getMeta(ctx, tx, id)
+	if err != nil {
+		span.RecordError(err)
+		return nil, nil, err
+	}
+	if meta == nil {
+		span.SetStatus(codes.Ok, "getObject ok")
+		return nil, nil, nil
+	}
+
+	basicObjMeta, ok := meta.Type.(*types.ObjectMeta_Basic)
+	if !ok {
+		err := fmt.Errorf("not a basic object")
+		span.RecordError(err)
+		return nil, nil, err
+	}
+
+	// @TODO (jrc): update last_accessed out of band
+	// @TODO (jrc): read all chunks in parallel
+
+	buf := []byte{}
+	for ndx := range basicObjMeta.Basic.NumChunks {
+		chunkKey, err := s.objectKey(id, ndx)
+		if err != nil {
+			span.RecordError(err)
+			return nil, nil, fmt.Errorf("failed to get object chunk key: %w", err)
+		}
+
+		chunk, err := tx.Get(chunkKey).Get()
+		if err != nil {
+			span.RecordError(err)
+			return nil, nil, fmt.Errorf("failed to get object chunk: %w", err)
+		}
+
+		buf = append(buf, chunk...)
+	}
+
+	span.SetStatus(codes.Ok, "getObject ok")
+	return meta, buf, nil
+}
+
+func (s *session) writeBasicObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
+	ctx, span := s.tracer.Start(ctx, "writeBasicObject")
+	defer span.End()
+
+	now := timestamppb.Now()
+
+	// check if the object already exists and should be overwritten
+	metaKey, meta, err := s.getMeta(ctx, tx, id)
+	if err != nil {
+		span.RecordError(err)
+		return err
+	}
+	if meta != nil {
+		// delete then update existing
+		if err := s.deleteBasicObject(ctx, tx, id, meta); err != nil {
+			span.RecordError(err)
+			return err
+		}
+	} else {
+		// create new
+		meta = &types.ObjectMeta{
+			Created: now,
+			Type: &types.ObjectMeta_Basic{
+				Basic: &types.BasicObjectMeta{},
+			},
+		}
+	}
+
+	meta.Updated = now
+	meta.LastAccess = now
+
+	basicObjMeta, ok := meta.Type.(*types.ObjectMeta_Basic)
+	if !ok {
+		err := fmt.Errorf("not a basic object")
+		span.RecordError(err)
+		return err
+	}
+
+	const maxValBytes = 100_000
+	length := uint32(len(data))
+	basicObjMeta.Basic.NumChunks = (length / maxValBytes) + 1
+	if length%maxValBytes == 0 {
+		basicObjMeta.Basic.NumChunks = length / maxValBytes
+	}
+
+	// write the meta object
+	metaBuf, err := proto.Marshal(meta)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to proto marshal object meta: %w", err)
+	}
+	tx.Set(metaKey, metaBuf)
+
+	// write all object data chunks
+	for ndx := range basicObjMeta.Basic.NumChunks {
+		start := ndx * maxValBytes
+		end := min((ndx+1)*maxValBytes, length)
+
+		chunkKey, err := s.objectKey(id, ndx)
+		if err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("failed to get object chunk key: %w", err)
+		}
+
+		tx.Set(chunkKey, data[start:end])
+	}
+
+	span.SetStatus(codes.Ok, "writeObject ok")
+	return nil
+}
+
+func (s *session) deleteBasicObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+	ctx, span := s.tracer.Start(ctx, "deleteObject") // nolint
+	defer span.End()
+
+	// delete the meta object
+	metaKey, err := s.metaKey(id)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to get meta key: %w", err)
+	}
+	tx.Clear(metaKey)
+
+	// @TODO (jrc): support cascade deleteing lists and sets
+	switch typ := meta.Type.(type) {
+	case *types.ObjectMeta_Basic:
+		// clear all object chunks
+		begin, err := s.objectKey(id, 0)
+		if err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("failed to get object begin key: %w", err)
+		}
+		end, err := s.objectKey(id, typ.Basic.NumChunks-1)
+		if err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("failed to get object start key: %w", err)
+		}
+		tx.ClearRange(fdb.KeyRange{
+			Begin: begin,
+			End:   end,
+		})
+	}
+
+	span.SetStatus(codes.Ok, "deleteObject ok")
+	return nil
+}
 
 func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleGet")
