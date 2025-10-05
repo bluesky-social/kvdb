@@ -32,6 +32,10 @@ type Directories struct {
 
 	// The directory that contiains information on database suers
 	user directory.DirectorySubspace
+
+	// The directory that contiains information on entries that are set to expire so
+	// we can clean them up
+	expire directory.DirectorySubspace
 }
 
 func InitDirectories(db fdb.Database) (dir *Directories, err error) {
@@ -45,6 +49,11 @@ func InitDirectories(db fdb.Database) (dir *Directories, err error) {
 	dir.user, err = dir.redis.CreateOrOpen(db, []string{"_user"}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user directory: %w", err)
+	}
+
+	dir.expire, err = dir.redis.CreateOrOpen(db, []string{"_expire"}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create expire directory: %w", err)
 	}
 
 	return
@@ -166,6 +175,8 @@ func NewSession(args *NewSessionArgs) *session {
 }
 
 func (s *session) Serve(ctx context.Context) {
+	go s.handleExpiringEntries(ctx)
+
 	ctx, span := s.tracer.Start(ctx, "Serve")
 	defer span.End()
 
@@ -799,4 +810,101 @@ func parseVariadicArguments(args []resp.Value) ([]string, error) {
 	}
 
 	return members, nil
+}
+
+func (s *session) handleExpiringEntries(ctx context.Context) {
+	ctx, span := s.tracer.Start(ctx, "handleExpiringEntries")
+	defer span.End()
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	const batchSize = 1000
+
+	for {
+		numDeleted, err := s.handleExpiringObjectBatch(ctx, batchSize)
+		if err != nil {
+			s.log.Error("failed to delete expired object batch", "err", err)
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			metrics.SpanOK(span)
+			return
+		default:
+		}
+
+		if numDeleted == batchSize {
+			// we processed a full batch, try again right away
+			continue
+		}
+
+		// wait and process again
+		<-ticker.C
+	}
+}
+
+func (s *session) handleExpiringObjectBatch(ctx context.Context, limit int) (int, error) {
+	ctx, span := s.tracer.Start(ctx, "handleExpiringObjectBatch")
+	defer span.End()
+
+	log := s.log.WithGroup("expiration")
+
+	deletedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		// get up to `limit` objects that are ready to expire
+		begin, end := s.dirs.expire.FDBRangeKeys()
+		rangeResult := tx.GetRange(fdb.KeyRange{Begin: begin, End: end}, fdb.RangeOptions{
+			Limit: limit,
+		})
+
+		count := 0
+		it := rangeResult.Iterator()
+		for it.Advance() {
+			kv, err := it.Get()
+			if err != nil {
+				return 0, fmt.Errorf("failed to iterate over key range: %w", err)
+			}
+
+			tx.Clear(kv.Key)
+
+			tup, err := s.dirs.expire.Unpack(kv.Key)
+			if err != nil {
+				log.Error("failed to unpack tuple", "err", err)
+				continue
+			}
+			if len(tup) != 1 {
+				log.Error("malformed key tuple", "err", "invalid length")
+				continue
+			}
+
+			key, err := cast[string](tup[0])
+			if err != nil {
+				log.Error("invalid tuple key type", "err", err)
+				continue
+			}
+
+			if err := s.deleteObject(ctx, tx, key, nil); err != nil {
+				log.Error("failed to delete expiring object", "err", err)
+				continue
+			}
+
+			count += 1
+		}
+
+		return count, nil
+	})
+	if err != nil {
+		span.RecordError(err)
+		return 0, err
+	}
+
+	deleted, err := cast[int](deletedAny)
+	if err != nil {
+		span.RecordError(err)
+		return 0, err
+	}
+
+	metrics.SpanOK(span)
+	return deleted, nil
 }

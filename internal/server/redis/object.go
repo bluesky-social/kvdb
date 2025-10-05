@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
@@ -199,6 +200,7 @@ func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id strin
 		span.RecordError(err)
 		return fmt.Errorf("failed to get meta key: %w", err)
 	}
+
 	tx.Clear(metaKey)
 
 	numChunks, err := getNumChunks(meta, gt.None[objectKind]())
@@ -588,11 +590,17 @@ func (s *session) handleExpire(ctx context.Context, args []resp.Value) (string, 
 			return 0, nil
 		}
 
+		// set the expiry time on the meta object
 		now := timestamppb.Now().AsTime()
 		meta.Expires = timestamppb.New(now.Add(delta))
-
 		if err := setProtoItem(tx, metaKey, meta); err != nil {
 			return 0, fmt.Errorf("failed to write object meta: %w", err)
+		}
+
+		// create a bookkeeping entry so we know when to permanently delete the object from foundation
+		expiringKey := s.dirs.expire.Pack(tuple.Tuple{key})
+		if err := setProtoItem(tx, expiringKey, meta); err != nil {
+			return 0, fmt.Errorf("failed to write expiring object: %w", err)
 		}
 
 		return 1, nil
