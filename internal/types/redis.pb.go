@@ -203,12 +203,17 @@ func (x *UserACLRule) GetLevel() UserAccessLevel {
 }
 
 type ObjectMeta struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Created       *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=created,proto3" json:"created,omitempty"`
-	Updated       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
-	LastAccess    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_access,json=lastAccess,proto3" json:"last_access,omitempty"`
-	NumChunks     uint32                 `protobuf:"varint,4,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
-	SizeBytes     uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Created    *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=created,proto3" json:"created,omitempty"`
+	Updated    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
+	LastAccess *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_access,json=lastAccess,proto3" json:"last_access,omitempty"`
+	// Types that are valid to be assigned to Type:
+	//
+	//	*ObjectMeta_Basic
+	//	*ObjectMeta_Set
+	//	*ObjectMeta_List
+	//	*ObjectMeta_ListItem
+	Type          isObjectMeta_Type `protobuf_oneof:"type"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -264,14 +269,183 @@ func (x *ObjectMeta) GetLastAccess() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *ObjectMeta) GetNumChunks() uint32 {
+func (x *ObjectMeta) GetType() isObjectMeta_Type {
+	if x != nil {
+		return x.Type
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetBasic() *BasicObjectMeta {
+	if x != nil {
+		if x, ok := x.Type.(*ObjectMeta_Basic); ok {
+			return x.Basic
+		}
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetSet() *SetMeta {
+	if x != nil {
+		if x, ok := x.Type.(*ObjectMeta_Set); ok {
+			return x.Set
+		}
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetList() *ListMeta {
+	if x != nil {
+		if x, ok := x.Type.(*ObjectMeta_List); ok {
+			return x.List
+		}
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetListItem() *ListItemMeta {
+	if x != nil {
+		if x, ok := x.Type.(*ObjectMeta_ListItem); ok {
+			return x.ListItem
+		}
+	}
+	return nil
+}
+
+type isObjectMeta_Type interface {
+	isObjectMeta_Type()
+}
+
+type ObjectMeta_Basic struct {
+	Basic *BasicObjectMeta `protobuf:"bytes,4,opt,name=basic,proto3,oneof"`
+}
+
+type ObjectMeta_Set struct {
+	Set *SetMeta `protobuf:"bytes,5,opt,name=set,proto3,oneof"`
+}
+
+type ObjectMeta_List struct {
+	List *ListMeta `protobuf:"bytes,6,opt,name=list,proto3,oneof"`
+}
+
+type ObjectMeta_ListItem struct {
+	ListItem *ListItemMeta `protobuf:"bytes,7,opt,name=list_item,json=listItem,proto3,oneof"`
+}
+
+func (*ObjectMeta_Basic) isObjectMeta_Type() {}
+
+func (*ObjectMeta_Set) isObjectMeta_Type() {}
+
+func (*ObjectMeta_List) isObjectMeta_Type() {}
+
+func (*ObjectMeta_ListItem) isObjectMeta_Type() {}
+
+type BasicObjectMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NumChunks     uint32                 `protobuf:"varint,1,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
+	SizeBytes     uint64                 `protobuf:"varint,2,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BasicObjectMeta) Reset() {
+	*x = BasicObjectMeta{}
+	mi := &file_redis_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BasicObjectMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BasicObjectMeta) ProtoMessage() {}
+
+func (x *BasicObjectMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BasicObjectMeta.ProtoReflect.Descriptor instead.
+func (*BasicObjectMeta) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *BasicObjectMeta) GetNumChunks() uint32 {
 	if x != nil {
 		return x.NumChunks
 	}
 	return 0
 }
 
-func (x *ObjectMeta) GetSizeBytes() uint64 {
+func (x *BasicObjectMeta) GetSizeBytes() uint64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+type SetMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NumItems      uint64                 `protobuf:"varint,1,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
+	NumChunks     uint32                 `protobuf:"varint,2,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
+	SizeBytes     uint64                 `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMeta) Reset() {
+	*x = SetMeta{}
+	mi := &file_redis_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMeta) ProtoMessage() {}
+
+func (x *SetMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMeta.ProtoReflect.Descriptor instead.
+func (*SetMeta) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SetMeta) GetNumItems() uint64 {
+	if x != nil {
+		return x.NumItems
+	}
+	return 0
+}
+
+func (x *SetMeta) GetNumChunks() uint32 {
+	if x != nil {
+		return x.NumChunks
+	}
+	return 0
+}
+
+func (x *SetMeta) GetSizeBytes() uint64 {
 	if x != nil {
 		return x.SizeBytes
 	}
@@ -280,19 +454,16 @@ func (x *ObjectMeta) GetSizeBytes() uint64 {
 
 type ListMeta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Created       *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=created,proto3" json:"created,omitempty"`
-	Updated       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
-	LastAccess    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_access,json=lastAccess,proto3" json:"last_access,omitempty"`
-	NumItems      uint64                 `protobuf:"varint,4,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
-	ItemHead      string                 `protobuf:"bytes,5,opt,name=item_head,json=itemHead,proto3" json:"item_head,omitempty"`
-	ItemTail      string                 `protobuf:"bytes,6,opt,name=item_tail,json=itemTail,proto3" json:"item_tail,omitempty"`
+	NumItems      uint64                 `protobuf:"varint,1,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
+	ItemHead      string                 `protobuf:"bytes,2,opt,name=item_head,json=itemHead,proto3" json:"item_head,omitempty"`
+	ItemTail      string                 `protobuf:"bytes,3,opt,name=item_tail,json=itemTail,proto3" json:"item_tail,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListMeta) Reset() {
 	*x = ListMeta{}
-	mi := &file_redis_proto_msgTypes[3]
+	mi := &file_redis_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -304,7 +475,7 @@ func (x *ListMeta) String() string {
 func (*ListMeta) ProtoMessage() {}
 
 func (x *ListMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[3]
+	mi := &file_redis_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -317,28 +488,7 @@ func (x *ListMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMeta.ProtoReflect.Descriptor instead.
 func (*ListMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *ListMeta) GetCreated() *timestamppb.Timestamp {
-	if x != nil {
-		return x.Created
-	}
-	return nil
-}
-
-func (x *ListMeta) GetUpdated() *timestamppb.Timestamp {
-	if x != nil {
-		return x.Updated
-	}
-	return nil
-}
-
-func (x *ListMeta) GetLastAccess() *timestamppb.Timestamp {
-	if x != nil {
-		return x.LastAccess
-	}
-	return nil
+	return file_redis_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListMeta) GetNumItems() uint64 {
@@ -362,32 +512,32 @@ func (x *ListMeta) GetItemTail() string {
 	return ""
 }
 
-type ListObjectMeta struct {
+type ListItemMeta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Created       *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=created,proto3" json:"created,omitempty"`
-	Updated       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated,proto3" json:"updated,omitempty"`
-	Id            string                 `protobuf:"bytes,3,opt,name=id,proto3" json:"id,omitempty"`
-	Next          string                 `protobuf:"bytes,4,opt,name=next,proto3" json:"next,omitempty"`
-	Previous      string                 `protobuf:"bytes,5,opt,name=previous,proto3" json:"previous,omitempty"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Next          string                 `protobuf:"bytes,2,opt,name=next,proto3" json:"next,omitempty"`
+	Previous      string                 `protobuf:"bytes,3,opt,name=previous,proto3" json:"previous,omitempty"`
+	NumChunks     uint32                 `protobuf:"varint,4,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
+	SizeBytes     uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListObjectMeta) Reset() {
-	*x = ListObjectMeta{}
-	mi := &file_redis_proto_msgTypes[4]
+func (x *ListItemMeta) Reset() {
+	*x = ListItemMeta{}
+	mi := &file_redis_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListObjectMeta) String() string {
+func (x *ListItemMeta) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListObjectMeta) ProtoMessage() {}
+func (*ListItemMeta) ProtoMessage() {}
 
-func (x *ListObjectMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[4]
+func (x *ListItemMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,44 +548,44 @@ func (x *ListObjectMeta) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListObjectMeta.ProtoReflect.Descriptor instead.
-func (*ListObjectMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{4}
+// Deprecated: Use ListItemMeta.ProtoReflect.Descriptor instead.
+func (*ListItemMeta) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *ListObjectMeta) GetCreated() *timestamppb.Timestamp {
-	if x != nil {
-		return x.Created
-	}
-	return nil
-}
-
-func (x *ListObjectMeta) GetUpdated() *timestamppb.Timestamp {
-	if x != nil {
-		return x.Updated
-	}
-	return nil
-}
-
-func (x *ListObjectMeta) GetId() string {
+func (x *ListItemMeta) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-func (x *ListObjectMeta) GetNext() string {
+func (x *ListItemMeta) GetNext() string {
 	if x != nil {
 		return x.Next
 	}
 	return ""
 }
 
-func (x *ListObjectMeta) GetPrevious() string {
+func (x *ListItemMeta) GetPrevious() string {
 	if x != nil {
 		return x.Previous
 	}
 	return ""
+}
+
+func (x *ListItemMeta) GetNumChunks() uint32 {
+	if x != nil {
+		return x.NumChunks
+	}
+	return 0
+}
+
+func (x *ListItemMeta) GetSizeBytes() uint64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
 }
 
 var File_redis_proto protoreflect.FileDescriptor
@@ -452,31 +602,41 @@ const file_redis_proto_rawDesc = "" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\x12(\n" +
 	"\x05rules\x18\x06 \x03(\v2\x12.types.UserACLRuleR\x05rules\";\n" +
 	"\vUserACLRule\x12,\n" +
-	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xf3\x01\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xec\x02\n" +
 	"\n" +
 	"ObjectMeta\x124\n" +
 	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
 	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x12;\n" +
 	"\vlast_access\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastAccess\x12\x1d\n" +
+	"lastAccess\x12.\n" +
+	"\x05basic\x18\x04 \x01(\v2\x16.types.BasicObjectMetaH\x00R\x05basic\x12\"\n" +
+	"\x03set\x18\x05 \x01(\v2\x0e.types.SetMetaH\x00R\x03set\x12%\n" +
+	"\x04list\x18\x06 \x01(\v2\x0f.types.ListMetaH\x00R\x04list\x122\n" +
+	"\tlist_item\x18\a \x01(\v2\x13.types.ListItemMetaH\x00R\blistItemB\x06\n" +
+	"\x04type\"O\n" +
+	"\x0fBasicObjectMeta\x12\x1d\n" +
+	"\n" +
+	"num_chunks\x18\x01 \x01(\rR\tnumChunks\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x02 \x01(\x04R\tsizeBytes\"d\n" +
+	"\aSetMeta\x12\x1b\n" +
+	"\tnum_items\x18\x01 \x01(\x04R\bnumItems\x12\x1d\n" +
+	"\n" +
+	"num_chunks\x18\x02 \x01(\rR\tnumChunks\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\"a\n" +
+	"\bListMeta\x12\x1b\n" +
+	"\tnum_items\x18\x01 \x01(\x04R\bnumItems\x12\x1b\n" +
+	"\titem_head\x18\x02 \x01(\tR\bitemHead\x12\x1b\n" +
+	"\titem_tail\x18\x03 \x01(\tR\bitemTail\"\x8c\x01\n" +
+	"\fListItemMeta\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04next\x18\x02 \x01(\tR\x04next\x12\x1a\n" +
+	"\bprevious\x18\x03 \x01(\tR\bprevious\x12\x1d\n" +
 	"\n" +
 	"num_chunks\x18\x04 \x01(\rR\tnumChunks\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\"\x8a\x02\n" +
-	"\bListMeta\x124\n" +
-	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
-	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x12;\n" +
-	"\vlast_access\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastAccess\x12\x1b\n" +
-	"\tnum_items\x18\x04 \x01(\x04R\bnumItems\x12\x1b\n" +
-	"\titem_head\x18\x05 \x01(\tR\bitemHead\x12\x1b\n" +
-	"\titem_tail\x18\x06 \x01(\tR\bitemTail\"\xbc\x01\n" +
-	"\x0eListObjectMeta\x124\n" +
-	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
-	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x12\x0e\n" +
-	"\x02id\x18\x03 \x01(\tR\x02id\x12\x12\n" +
-	"\x04next\x18\x04 \x01(\tR\x04next\x12\x1a\n" +
-	"\bprevious\x18\x05 \x01(\tR\bprevious*\x97\x01\n" +
+	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
 	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +
@@ -496,34 +656,35 @@ func file_redis_proto_rawDescGZIP() []byte {
 }
 
 var file_redis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_redis_proto_goTypes = []any{
 	(UserAccessLevel)(0),          // 0: types.UserAccessLevel
 	(*User)(nil),                  // 1: types.User
 	(*UserACLRule)(nil),           // 2: types.UserACLRule
 	(*ObjectMeta)(nil),            // 3: types.ObjectMeta
-	(*ListMeta)(nil),              // 4: types.ListMeta
-	(*ListObjectMeta)(nil),        // 5: types.ListObjectMeta
-	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
+	(*BasicObjectMeta)(nil),       // 4: types.BasicObjectMeta
+	(*SetMeta)(nil),               // 5: types.SetMeta
+	(*ListMeta)(nil),              // 6: types.ListMeta
+	(*ListItemMeta)(nil),          // 7: types.ListItemMeta
+	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
 }
 var file_redis_proto_depIdxs = []int32{
-	6,  // 0: types.User.created:type_name -> google.protobuf.Timestamp
-	6,  // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
+	8,  // 0: types.User.created:type_name -> google.protobuf.Timestamp
+	8,  // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
 	2,  // 2: types.User.rules:type_name -> types.UserACLRule
 	0,  // 3: types.UserACLRule.level:type_name -> types.UserAccessLevel
-	6,  // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
-	6,  // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
-	6,  // 6: types.ObjectMeta.last_access:type_name -> google.protobuf.Timestamp
-	6,  // 7: types.ListMeta.created:type_name -> google.protobuf.Timestamp
-	6,  // 8: types.ListMeta.updated:type_name -> google.protobuf.Timestamp
-	6,  // 9: types.ListMeta.last_access:type_name -> google.protobuf.Timestamp
-	6,  // 10: types.ListObjectMeta.created:type_name -> google.protobuf.Timestamp
-	6,  // 11: types.ListObjectMeta.updated:type_name -> google.protobuf.Timestamp
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	8,  // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
+	8,  // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
+	8,  // 6: types.ObjectMeta.last_access:type_name -> google.protobuf.Timestamp
+	4,  // 7: types.ObjectMeta.basic:type_name -> types.BasicObjectMeta
+	5,  // 8: types.ObjectMeta.set:type_name -> types.SetMeta
+	6,  // 9: types.ObjectMeta.list:type_name -> types.ListMeta
+	7,  // 10: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_redis_proto_init() }
@@ -531,13 +692,19 @@ func file_redis_proto_init() {
 	if File_redis_proto != nil {
 		return
 	}
+	file_redis_proto_msgTypes[2].OneofWrappers = []any{
+		(*ObjectMeta_Basic)(nil),
+		(*ObjectMeta_Set)(nil),
+		(*ObjectMeta_List)(nil),
+		(*ObjectMeta_ListItem)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_redis_proto_rawDesc), len(file_redis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

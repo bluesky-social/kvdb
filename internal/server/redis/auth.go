@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
-	"go.opentelemetry.io/otel/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -34,7 +35,7 @@ func (s *session) handlePing(ctx context.Context, args []resp.Value) (string, er
 		res = resp.FormatSimpleString(arg)
 	}
 
-	span.SetStatus(codes.Ok, "ping handled")
+	metrics.SpanOK(span)
 	return res, nil
 }
 
@@ -46,7 +47,7 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 	alreadyAuthed := s.user != nil
 	s.userMu.RUnlock()
 	if alreadyAuthed {
-		span.SetStatus(codes.Ok, "already authed")
+		metrics.SpanOK(span)
 		return resp.FormatError(fmt.Errorf("session is already authenticated")), nil
 	}
 
@@ -68,16 +69,12 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 	if err != nil {
 		return "", recordErr(span, err)
 	}
-	if user == nil {
-		span.SetStatus(codes.Ok, "user not found")
-		return resp.FormatError(errInvalidCredentials), nil
-	}
-	if !user.Enabled {
-		span.SetStatus(codes.Ok, "user is disabled")
+	if user == nil || !user.Enabled {
+		metrics.SpanOK(span)
 		return resp.FormatError(errInvalidCredentials), nil
 	}
 	if err := comparePasswords(user.PasswordHash, pass); err != nil {
-		span.SetStatus(codes.Ok, "invalid password")
+		metrics.SpanOK(span)
 		return resp.FormatError(errInvalidCredentials), nil
 	}
 
@@ -123,7 +120,7 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 	}
 	s.userMu.Unlock()
 
-	span.SetStatus(codes.Ok, "auth handled")
+	metrics.SpanOK(span)
 	return resp.FormatSimpleString("OK"), nil
 }
 
@@ -229,11 +226,15 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 		}},
 	}
 
-	if err := s.setProtoItem(s.userKey(username), user); err != nil {
+	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		err := setProtoItem(tx, s.userKey(username), user)
+		return nil, err
+	})
+	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to save user to database: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "acl handled")
+	metrics.SpanOK(span)
 	return resp.FormatSimpleString("OK"), nil
 }
 

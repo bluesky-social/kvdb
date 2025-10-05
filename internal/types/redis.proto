@@ -29,23 +29,35 @@ message ObjectMeta {
   google.protobuf.Timestamp created = 1;
   google.protobuf.Timestamp updated = 2;
   google.protobuf.Timestamp last_access = 3;
-  uint32 num_chunks = 4;
-  uint64 size_bytes = 5;
+  oneof type {
+    BasicObjectMeta basic = 4;
+    SetMeta set = 5;
+    ListMeta list = 6;
+    ListItemMeta list_item = 7;
+  }
+}
+
+message BasicObjectMeta {
+  uint32 num_chunks = 1;
+  uint64 size_bytes = 2;
+}
+
+message SetMeta {
+  uint64 num_items = 1;
+  uint32 num_chunks = 2;
+  uint64 size_bytes = 3;
 }
 
 message ListMeta {
-  google.protobuf.Timestamp created = 1;
-  google.protobuf.Timestamp updated = 2;
-  google.protobuf.Timestamp last_access = 3;
-  uint64 num_items = 4;
-  string item_head = 5;
-  string item_tail= 6;
+  uint64 num_items = 1;
+  string item_head = 2;
+  string item_tail= 3;
 }
 
-message ListObjectMeta {
-  google.protobuf.Timestamp created = 1;
-  google.protobuf.Timestamp updated = 2;
-  string id = 3;
-  string next = 4;
-  string previous = 5;
+message ListItemMeta {
+  string id = 1;
+  string next = 2;
+  string previous = 3;
+  uint32 num_chunks = 4;
+  uint64 size_bytes = 5;
 }

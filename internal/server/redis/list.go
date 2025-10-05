@@ -6,10 +6,9 @@ import (
 	"strconv"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/bluesky-social/kvdb/internal/metrics"
 	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
-	"go.opentelemetry.io/otel/codes"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -49,7 +48,7 @@ func (s *session) handleLLen(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "llen handled")
+	metrics.SpanOK(span)
 	return resp.FormatUint(num), nil
 }
 
@@ -57,16 +56,28 @@ func (s *session) handleLPush(ctx context.Context, args []resp.Value) (string, e
 	ctx, span := s.tracer.Start(ctx, "handleLPush")
 	defer span.End()
 
-	span.SetStatus(codes.Ok, "lpush handled")
-	return s.handlePush(ctx, args, true)
+	res, err := s.handlePush(ctx, args, true)
+	if err != nil {
+		span.RecordError(err)
+		return res, err
+	}
+
+	metrics.SpanOK(span)
+	return res, err
 }
 
 func (s *session) handleRPush(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleRPush")
 	defer span.End()
 
-	span.SetStatus(codes.Ok, "rpush handled")
-	return s.handlePush(ctx, args, false)
+	res, err := s.handlePush(ctx, args, false)
+	if err != nil {
+		span.RecordError(err)
+		return res, err
+	}
+
+	metrics.SpanOK(span)
+	return res, err
 }
 
 func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) (string, error) {
@@ -88,109 +99,132 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		metaKey, listMeta, err := s.getListMeta(ctx, tx, key)
+		listMetaKey, objMeta, err := s.getObjectMeta(ctx, tx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get list meta: %w", err)
 		}
 
 		now := timestamppb.Now()
-		if listMeta == nil {
-			// create a new list
-			listMeta = &types.ListMeta{
+		if objMeta == nil {
+			// create a new list object
+			objMeta = &types.ObjectMeta{
 				Created: now,
+				Type:    &types.ObjectMeta_List{List: &types.ListMeta{}},
 			}
 		}
+		objMeta.Updated = now
+		objMeta.LastAccess = now
+
+		objMetaList, err := cast[*types.ObjectMeta_List](objMeta.Type)
+		if err != nil {
+			return nil, err
+		}
+		listMeta := objMetaList.List
 
 		// create each item meta object and store the blob itself
 		for _, member := range members {
-			objIDInt, err := s.allocateNewUID(ctx, tx)
+			listMeta.NumItems += 1
+
+			// allocated a UID for this list item
+			itemIDInt, err := s.allocateNewUID(ctx, tx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to allocate new uid: %w", err)
 			}
-			objID := strconv.FormatUint(objIDInt, 10)
+			itemID := strconv.FormatUint(itemIDInt, 10)
 
-			objMeta := &types.ListObjectMeta{
-				Created: now,
-				Updated: now,
-				Id:      objID,
-			}
-
-			listMeta.NumItems += 1
+			listItemMeta := &types.ListItemMeta{}
 			if left {
-				// assign back pointers if a previous list head exists
-				headKey, err := s.listObjMetaKey(key, listMeta.ItemHead)
+				headKey, err := s.listItemMetaKey(key, listMeta.ItemHead)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get list head key: %w", err)
 				}
 
-				head := &types.ListObjectMeta{}
-				exists, err := s.getProtoItem(headKey, head)
+				headObj := &types.ObjectMeta{}
+				exists, err := getProtoItem(tx, headKey, headObj)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get list head: %w", err)
 				}
-				if exists {
-					head.Previous = objID
-					if err := s.setProtoItem(headKey, head); err != nil {
+
+				if !exists {
+					// we're creating a new list, so assign the tail in addition to the head
+					listMeta.ItemTail = itemID
+				} else {
+					// assign back pointers if a previous list head exists
+					head, err := cast[*types.ObjectMeta_ListItem](headObj.Type)
+					if err != nil {
+						return nil, err
+					}
+					head.ListItem.Previous = itemID
+
+					if err := setProtoItem(tx, headKey, headObj); err != nil {
 						return nil, fmt.Errorf("failed to set list head: %w", err)
 					}
-				} else {
-					// we're creating a new list, so assign both the head and tail
-					listMeta.ItemTail = objID
 				}
 
 				// assign forwards pointers
-				objMeta.Next = listMeta.ItemHead
-				listMeta.ItemHead = objID
+				listItemMeta.Next = listMeta.ItemHead
+				listMeta.ItemHead = itemID
 			} else {
-				// assign forwards pointers if a previous list tail exists
-				tailKey, err := s.listObjMetaKey(key, listMeta.ItemTail)
+				tailKey, err := s.listItemMetaKey(key, listMeta.ItemTail)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get list tail key: %w", err)
 				}
 
-				tail := &types.ListObjectMeta{}
-				exists, err := s.getProtoItem(tailKey, tail)
+				tailObj := &types.ObjectMeta{}
+				exists, err := getProtoItem(tx, tailKey, tailObj)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get list tail: %w", err)
 				}
-				if exists {
-					tail.Next = objID
-					if err := s.setProtoItem(tailKey, tail); err != nil {
+
+				if !exists {
+					// we're creating a new list, so assign the head in addition to the tail
+					listMeta.ItemHead = itemID
+				} else {
+					// assign forwards pointers if a previous list tail exists
+					tail, err := cast[*types.ObjectMeta_ListItem](tailObj.Type)
+					if err != nil {
+						return nil, err
+					}
+					tail.ListItem.Next = itemID
+
+					if err := setProtoItem(tx, tailKey, tailObj); err != nil {
 						return nil, fmt.Errorf("failed to set list tail: %w", err)
 					}
-				} else {
-					// we're creating a new list, so assign both the head and tail
-					listMeta.ItemHead = objID
 				}
 
 				// assign back pointers
-				objMeta.Previous = listMeta.ItemTail
-				listMeta.ItemTail = objID
+				listItemMeta.Previous = listMeta.ItemTail
+				listMeta.ItemTail = itemID
 			}
 
-			objMetaKey, err := s.listObjMetaKey(key, objID)
+			// save the list item meta object
+			itemMetaKey, err := s.listItemMetaKey(key, itemID)
 			if err != nil {
-				return nil, fmt.Errorf("failed to get list object meta key: %w", err)
+				return nil, fmt.Errorf("failed to get list item meta key: %w", err)
 			}
 
-			if err := s.setProtoItem(objMetaKey, objMeta); err != nil {
-				return nil, fmt.Errorf("failed to write list object meta: %w", err)
+			listObjMeta := &types.ObjectMeta{
+				Created: now,
+				Updated: now,
+				Type: &types.ObjectMeta_ListItem{
+					ListItem: listItemMeta,
+				},
 			}
 
-			if err := s.writeObject(ctx, tx, objID, []byte(member)); err != nil {
-				return nil, fmt.Errorf("failed to create object: %w", err)
+			if err := setProtoItem(tx, itemMetaKey, listObjMeta); err != nil {
+				return nil, fmt.Errorf("failed to write list item meta: %w", err)
+			}
+
+			// save the list item object blob
+			if err := s.writeObject(ctx, tx, itemID, objectKindListItem, []byte(member)); err != nil {
+				return nil, fmt.Errorf("failed to create list item: %w", err)
 			}
 		}
 
-		// update and save our list meta
-		listMeta.Updated = now
-		listMeta.LastAccess = now
-
-		metaBuf, err := proto.Marshal(listMeta)
-		if err != nil {
-			return nil, fmt.Errorf("failed to proto marshal list meta: %w", err)
+		// save the full list object meta
+		if err := setProtoItem(tx, listMetaKey, objMeta); err != nil {
+			return nil, fmt.Errorf("failed to write list object meta: %w", err)
 		}
-		tx.Set(metaKey, metaBuf)
 
 		return nil, nil
 	})
@@ -198,7 +232,7 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "push handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(int64(len(members))), nil
 }
 
@@ -244,13 +278,13 @@ func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, 
 
 		objKey := listMeta.ItemHead
 		for targetNdx > 0 && objKey != "" {
-			objMetaKey, err := s.listObjMetaKey(key, objKey)
+			itemMetaKey, err := s.listItemMetaKey(key, objKey)
 			if err != nil {
-				return nil, fmt.Errorf("failed to get list object meta: %w", err)
+				return nil, fmt.Errorf("failed to get list item meta: %w", err)
 			}
 
-			listObjMeta := &types.ListObjectMeta{}
-			ok, err := s.getProtoItem(objMetaKey, listObjMeta)
+			objMeta := &types.ObjectMeta{}
+			ok, err := getProtoItem(tx, itemMetaKey, objMeta)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get list object meta: %w", err)
 			}
@@ -258,11 +292,16 @@ func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, 
 				return nil, fmt.Errorf("list object meta not found")
 			}
 
+			listItemMeta, err := cast[*types.ObjectMeta_ListItem](objMeta.Type)
+			if err != nil {
+				return nil, err
+			}
+
 			targetNdx -= 1
-			objKey = listObjMeta.Next
+			objKey = listItemMeta.ListItem.Next
 		}
 
-		_, buf, err := s.getObject(ctx, tx, objKey)
+		_, buf, err := s.getObject(ctx, tx, objectKindListItem, objKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object payload: %w", err)
 		}
@@ -272,11 +311,11 @@ func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, 
 		return buf, nil
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
+		return "", recordErr(span, err)
 	}
 
 	if bufAny == nil {
-		span.SetStatus(codes.Ok, "lindex handled")
+		metrics.SpanOK(span)
 		return resp.FormatNil(), nil
 	}
 
@@ -285,6 +324,6 @@ func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "lindex handled")
+	metrics.SpanOK(span)
 	return resp.FormatBulkString(string(buf)), nil
 }

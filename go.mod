@@ -14,6 +14,7 @@ require (
 	github.com/RoaringBitmap/roaring/v2 v2.10.0
 	github.com/apple/foundationdb/bindings/go v0.0.0-20250221231555-5140696da2df
 	github.com/bluesky-social/go-util v0.0.0-20250911184242-2bd2bc840175
+	github.com/jcalabro/gt v0.0.6
 	golang.org/x/crypto v0.41.0
 )
 

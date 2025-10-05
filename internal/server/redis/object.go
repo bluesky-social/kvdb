@@ -2,14 +2,222 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/bluesky-social/kvdb/internal/metrics"
+	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
-	"go.opentelemetry.io/otel/codes"
+	"github.com/jcalabro/gt"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+type objectKind int64
+
+const (
+	objectKindBasic objectKind = 1 << iota
+	objectKindSet
+	objectKindList
+	objectKindListItem
+)
+
+var (
+	errWrongKind = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+)
+
+func getNumChunks(meta *types.ObjectMeta, kind gt.Option[objectKind]) (uint32, error) {
+	var (
+		numChunks uint32
+		objKind   objectKind
+	)
+
+	switch typ := meta.Type.(type) {
+	case *types.ObjectMeta_Basic:
+		objKind = objectKindBasic
+		numChunks = typ.Basic.NumChunks
+	case *types.ObjectMeta_Set:
+		objKind = objectKindSet
+		numChunks = typ.Set.NumChunks
+	case *types.ObjectMeta_ListItem:
+		objKind = objectKindListItem
+		numChunks = typ.ListItem.NumChunks
+	default:
+		return 0, fmt.Errorf("object of type %T cannot be retrieved by getObject", meta.Type)
+	}
+
+	if kind.HasVal() {
+		if kind.Val() != objKind {
+			return 0, errWrongKind
+		}
+	}
+
+	return numChunks, nil
+}
+
+func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, kind objectKind, id string) (*types.ObjectMeta, []byte, error) {
+	ctx, span := s.tracer.Start(ctx, "getObject")
+	defer span.End()
+
+	_, meta, err := s.getObjectMeta(ctx, tx, id)
+	if err != nil {
+		span.RecordError(err)
+		return nil, nil, err
+	}
+	if meta == nil {
+		metrics.SpanOK(span)
+		return nil, nil, nil
+	}
+
+	// @TODO (jrc): update last_accessed out of band
+	// @TODO (jrc): read all chunks in parallel
+
+	numChunks, err := getNumChunks(meta, gt.Some(kind))
+	if err != nil {
+		span.RecordError(err)
+		return nil, nil, err
+	}
+
+	buf := []byte{}
+	for ndx := range numChunks {
+		chunkKey, err := s.objectKey(id, ndx)
+		if err != nil {
+			span.RecordError(err)
+			return nil, nil, fmt.Errorf("failed to get object chunk key: %w", err)
+		}
+
+		chunk, err := tx.Get(chunkKey).Get()
+		if err != nil {
+			span.RecordError(err)
+			return nil, nil, fmt.Errorf("failed to get object chunk: %w", err)
+		}
+
+		buf = append(buf, chunk...)
+	}
+
+	metrics.SpanOK(span)
+	return meta, buf, nil
+}
+
+func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string, kind objectKind, data []byte) error {
+	ctx, span := s.tracer.Start(ctx, "writeObject")
+	defer span.End()
+
+	now := timestamppb.Now()
+
+	// check if the object already exists and should be overwritten
+	metaKey, meta, err := s.getObjectMeta(ctx, tx, id)
+	if err != nil {
+		span.RecordError(err)
+		return err
+	}
+	if meta != nil {
+		// delete then update existing
+		if err := s.deleteObject(ctx, tx, id, meta); err != nil {
+			span.RecordError(err)
+			return err
+		}
+	} else {
+		// create new
+		meta = &types.ObjectMeta{
+			Created: now,
+		}
+		switch kind {
+		case objectKindBasic:
+			meta.Type = &types.ObjectMeta_Basic{Basic: &types.BasicObjectMeta{}}
+		case objectKindSet:
+			meta.Type = &types.ObjectMeta_Set{Set: &types.SetMeta{}}
+		case objectKindListItem:
+			meta.Type = &types.ObjectMeta_ListItem{ListItem: &types.ListItemMeta{}}
+		}
+	}
+
+	meta.Updated = now
+	meta.LastAccess = now
+
+	// set the new number of chunks
+	const maxValBytes = 100_000
+	length := uint32(len(data))
+	numChunks := (length / maxValBytes) + 1
+	if length%maxValBytes == 0 {
+		numChunks = length / maxValBytes
+	}
+
+	switch typ := meta.Type.(type) {
+	case *types.ObjectMeta_Basic:
+		typ.Basic.NumChunks = numChunks
+	case *types.ObjectMeta_Set:
+		typ.Set.NumChunks = numChunks
+	case *types.ObjectMeta_ListItem:
+		typ.ListItem.NumChunks = numChunks
+	}
+
+	// write the meta object
+	metaBuf, err := proto.Marshal(meta)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to proto marshal object meta: %w", err)
+	}
+	tx.Set(metaKey, metaBuf)
+
+	// write all object data chunks
+	for ndx := range numChunks {
+		start := ndx * maxValBytes
+		end := min((ndx+1)*maxValBytes, length)
+
+		chunkKey, err := s.objectKey(id, ndx)
+		if err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("failed to get object chunk key: %w", err)
+		}
+
+		tx.Set(chunkKey, data[start:end])
+	}
+
+	metrics.SpanOK(span)
+	return nil
+}
+
+func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+	ctx, span := s.tracer.Start(ctx, "deleteObject") // nolint
+	defer span.End()
+
+	// delete the meta object
+	metaKey, err := s.metaKey(id)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to get meta key: %w", err)
+	}
+	tx.Clear(metaKey)
+
+	numChunks, err := getNumChunks(meta, gt.None[objectKind]())
+	if err != nil {
+		span.RecordError(err)
+		return err
+	}
+
+	// clear all object chunks
+	begin, err := s.objectKey(id, 0)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to get object begin key: %w", err)
+	}
+	end, err := s.objectKey(id, numChunks-1)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to get object start key: %w", err)
+	}
+	tx.ClearRange(fdb.KeyRange{
+		Begin: begin,
+		End:   end,
+	})
+
+	metrics.SpanOK(span)
+	return nil
+}
 
 func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleGet")
@@ -25,16 +233,16 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	bufAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		_, buf, err := s.getObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, objectKindBasic, key)
 		return buf, err
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to get value: %w", err))
+		return "", recordErr(span, fmt.Errorf("failed to get object: %w", err))
 	}
 
 	buf, err := cast[[]byte](bufAny)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to cast result value: %w", err))
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
 	res := resp.FormatNil()
@@ -42,7 +250,7 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 		res = resp.FormatBulkString(string(buf))
 	}
 
-	span.SetStatus(codes.Ok, "get handled")
+	metrics.SpanOK(span)
 	return res, nil
 }
 
@@ -72,10 +280,10 @@ func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, 
 
 	exists, err := cast[bool](existsAny)
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to cast result value: %w", err))
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "exists handled")
+	metrics.SpanOK(span)
 	return resp.FormatBoolAsInt(exists), nil
 }
 
@@ -98,13 +306,13 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		return nil, s.writeObject(ctx, tx, key, []byte(val))
+		return nil, s.writeObject(ctx, tx, key, objectKindBasic, []byte(val))
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "set handled")
+	metrics.SpanOK(span)
 	return resp.FormatSimpleString("OK"), nil
 }
 
@@ -146,7 +354,7 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, err)
 	}
 
-	span.SetStatus(codes.Ok, "delete handled")
+	metrics.SpanOK(span)
 	return resp.FormatBoolAsInt(exists), nil
 }
 
@@ -159,7 +367,7 @@ func (s *session) handleIncr(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "incr handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(res), nil
 }
 
@@ -181,7 +389,7 @@ func (s *session) handleIncrBy(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "incrby handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(res), nil
 }
 
@@ -194,7 +402,7 @@ func (s *session) handleDecr(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "decr handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(res), nil
 }
 
@@ -223,7 +431,7 @@ func (s *session) handleDecrBy(ctx context.Context, args []resp.Value) (string, 
 		return "", recordErr(span, fmt.Errorf("failed to write value: %w", err))
 	}
 
-	span.SetStatus(codes.Ok, "decrby handled")
+	metrics.SpanOK(span)
 	return resp.FormatInt(res), nil
 }
 
@@ -246,7 +454,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 	}
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, buf, err := s.getObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, objectKindBasic, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
@@ -262,7 +470,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 		num += by
 
 		buf = []byte(strconv.FormatInt(num, 10))
-		if err = s.writeObject(ctx, tx, key, buf); err != nil {
+		if err = s.writeObject(ctx, tx, key, objectKindBasic, buf); err != nil {
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 
@@ -277,7 +485,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 		return 0, recordErr(span, err)
 	}
 
-	span.SetStatus(codes.Ok, "incr decr handled")
+	metrics.SpanOK(span)
 	return res, nil
 }
 
@@ -305,7 +513,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 	}
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, buf, err := s.getObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, objectKindBasic, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
@@ -321,7 +529,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 		num += by
 
 		buf = []byte(strconv.FormatFloat(num, 'g', -1, 64))
-		if err = s.writeObject(ctx, tx, key, buf); err != nil {
+		if err = s.writeObject(ctx, tx, key, objectKindBasic, buf); err != nil {
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 
@@ -336,6 +544,6 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 		return "", recordErr(span, recordErr(span, err))
 	}
 
-	span.SetStatus(codes.Ok, "incrbyfloat handled")
+	metrics.SpanOK(span)
 	return resp.FormatBulkString(string(res)), nil
 }

@@ -21,7 +21,6 @@ import (
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -183,7 +182,7 @@ func (s *session) Serve(ctx context.Context) {
 		s.write(s.handleCommand(ctx, cmd))
 	}
 
-	span.SetStatus(codes.Ok, "session complete")
+	metrics.SpanOK(span)
 }
 
 // Returns the FDB key of an object in the global user directory
@@ -242,20 +241,8 @@ func (s *session) reverseUIDKey(id string) (fdb.Key, error) {
 	return s.user.reverseUIDDir.Pack(tuple.Tuple{id}), nil
 }
 
-// Returns the FDB key of an object in the per-user list directory
-func (s *session) listKey(id string) (fdb.Key, error) {
-	s.userMu.RLock()
-	defer s.userMu.RUnlock()
-
-	if s.user == nil {
-		return nil, fmt.Errorf("authentication is required")
-	}
-
-	return s.user.listDir.Pack(tuple.Tuple{id}), nil
-}
-
 // Returns the FDB key of an object in the per-user, per-list item directory
-func (s *session) listObjMetaKey(listID, objID string) (fdb.Key, error) {
+func (s *session) listItemMetaKey(listID, itemID string) (fdb.Key, error) {
 	s.userMu.RLock()
 	defer s.userMu.RUnlock()
 
@@ -268,8 +255,9 @@ func (s *session) listObjMetaKey(listID, objID string) (fdb.Key, error) {
 		return nil, fmt.Errorf("failed to open per-list directory: %w", err)
 	}
 
-	return dir.Pack(tuple.Tuple{objID}), nil
+	return dir.Pack(tuple.Tuple{itemID}), nil
 }
+
 func (s *session) write(msg string) {
 	_, err := s.conn.Write([]byte(msg))
 	if err != nil {
@@ -286,7 +274,7 @@ func (s *session) parseCommand(ctx context.Context, reader *bufio.Reader) (*resp
 		return nil, recordErr(span, err)
 	}
 
-	span.SetStatus(codes.Ok, "command parsed")
+	metrics.SpanOK(span)
 	return cmd, nil
 }
 
@@ -326,7 +314,7 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 	}
 	if res != "" {
 		status = metrics.StatusOK
-		span.SetStatus(codes.Ok, "command handled")
+		metrics.SpanOK(span)
 		return res
 	}
 
@@ -393,7 +381,7 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 	}
 
 	status = metrics.StatusOK
-	span.SetStatus(codes.Ok, "command handled")
+	metrics.SpanOK(span)
 	return res
 }
 
@@ -467,35 +455,25 @@ func cast[T any](item any) (T, error) {
 	}
 
 	var t T
-	return t, fmt.Errorf("failed to cast to %T", t)
+	return t, fmt.Errorf("failed to cast item of type %T to %T", item, t)
 }
 
-func (s *session) setProtoItem(key fdb.Key, item proto.Message) error {
+func setProtoItem(tx fdb.Transaction, key fdb.Key, item proto.Message) error {
 	buf, err := proto.Marshal(item)
 	if err != nil {
 		return fmt.Errorf("failed to proto marshal item: %w", err)
 	}
 
-	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		tx.Set(key, buf)
-		return nil, nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to write item to database: %w", err)
-	}
-
+	tx.Set(key, buf)
 	return nil
 }
 
-func getItem[T any](s *session, key fdb.Key) (T, error) {
+func getItem[T any](tx fdb.ReadTransaction, key fdb.Key) (T, error) {
 	var item T
-	itemAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		return tx.Get(key).Get()
-	})
+	itemAny, err := tx.Get(key).Get()
 	if err != nil {
 		return item, err
 	}
-
 	if itemAny == nil {
 		return item, nil // item does not exist
 	}
@@ -503,8 +481,8 @@ func getItem[T any](s *session, key fdb.Key) (T, error) {
 	return cast[T](itemAny)
 }
 
-func (s *session) getProtoItem(key fdb.Key, item proto.Message) (bool, error) {
-	buf, err := getItem[[]byte](s, key)
+func getProtoItem(tx fdb.ReadTransaction, key fdb.Key, item proto.Message) (bool, error) {
+	buf, err := getItem[[]byte](tx, key)
 	if err != nil {
 		return false, err
 	}
@@ -522,15 +500,21 @@ func (s *session) getProtoItem(key fdb.Key, item proto.Message) (bool, error) {
 
 func (s *session) getUser(username string) (*types.User, error) {
 	user := &types.User{}
-	exists, err := s.getProtoItem(s.userKey(username), user)
+	existsAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		return getProtoItem(tx, s.userKey(username), user)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	exists, err := cast[bool](existsAny)
 	if err != nil {
 		return nil, err
 	}
 
 	if !exists {
-		return nil, nil
+		user = nil
 	}
-
 	return user, nil
 }
 
@@ -548,200 +532,79 @@ func userIsAdmin(user *types.User) bool {
 	return false
 }
 
-// Returns the associated metadata for an object. Returns nil if the object does not exist.
-func (s *session) getObjectMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
-	ctx, span := s.tracer.Start(ctx, "getObjectMeta") // nolint
+func (s *session) getMeta(ctx context.Context, tx fdb.ReadTransaction, id string, meta proto.Message) (bool, fdb.Key, error) {
+	ctx, span := s.tracer.Start(ctx, "getMeta") // nolint
 	defer span.End()
 
 	metaKey, err := s.metaKey(id)
 	if err != nil {
 		span.RecordError(err)
-		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
+		return false, nil, fmt.Errorf("failed to get meta key: %w", err)
 	}
 
 	metaBuf, err := tx.Get(metaKey).Get()
 	if err != nil {
 		span.RecordError(err)
-		return metaKey, nil, fmt.Errorf("failed to get object meta from database: %w", err)
+		return false, metaKey, fmt.Errorf("failed to get object meta: %w", err)
 	}
 
 	if len(metaBuf) == 0 {
-		span.SetStatus(codes.Ok, "getObject ok")
-		return metaKey, nil, nil
+		metrics.SpanOK(span)
+		return false, metaKey, nil
 	}
 
-	meta := &types.ObjectMeta{}
 	if err = proto.Unmarshal(metaBuf, meta); err != nil {
 		span.RecordError(err)
-		return metaKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
+		return false, metaKey, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
 	}
 
-	span.SetStatus(codes.Ok, "getObjectMeta ok")
-	return metaKey, meta, nil
+	metrics.SpanOK(span)
+	return true, metaKey, nil
 }
 
-func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
-	ctx, span := s.tracer.Start(ctx, "getObject")
+// Returns the associated metadata for an object of any type. Returns nil if it not exist.
+func (s *session) getObjectMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+	ctx, span := s.tracer.Start(ctx, "getObjectMeta")
 	defer span.End()
 
-	_, meta, err := s.getObjectMeta(ctx, tx, id)
+	meta := &types.ObjectMeta{}
+	exists, key, err := s.getMeta(ctx, tx, id, meta)
 	if err != nil {
 		span.RecordError(err)
 		return nil, nil, err
 	}
-	if meta == nil {
-		span.SetStatus(codes.Ok, "getObject ok")
-		return nil, nil, nil
+	if !exists {
+		meta = nil
 	}
 
-	// @TODO (jrc): update last_accessed out of band
-	// @TODO (jrc): read all chunks in parallel
-
-	buf := []byte{}
-	for ndx := range meta.NumChunks {
-		chunkKey, err := s.objectKey(id, ndx)
-		if err != nil {
-			span.RecordError(err)
-			return nil, nil, fmt.Errorf("failed to get object chunk key: %w", err)
-		}
-
-		chunk, err := tx.Get(chunkKey).Get()
-		if err != nil {
-			span.RecordError(err)
-			return nil, nil, fmt.Errorf("failed to get object chunk: %w", err)
-		}
-
-		buf = append(buf, chunk...)
-	}
-
-	span.SetStatus(codes.Ok, "getObject ok")
-	return meta, buf, nil
-}
-
-func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
-	ctx, span := s.tracer.Start(ctx, "writeObject")
-	defer span.End()
-
-	now := timestamppb.Now()
-
-	// check if the object already exists and should be overwritten
-	metaKey, meta, err := s.getObjectMeta(ctx, tx, id)
-	if err != nil {
-		span.RecordError(err)
-		return err
-	}
-	if meta != nil {
-		// delete then update existing
-		if err := s.deleteObject(ctx, tx, id, meta); err != nil {
-			span.RecordError(err)
-			return err
-		}
-	} else {
-		// create new
-		meta = &types.ObjectMeta{
-			Created: now,
-		}
-	}
-
-	meta.Updated = now
-	meta.LastAccess = now
-	meta.SizeBytes = uint64(len(data))
-
-	const maxValBytes = 100_000
-	length := uint32(len(data))
-	meta.NumChunks = (length / maxValBytes) + 1
-	if length%maxValBytes == 0 {
-		meta.NumChunks = length / maxValBytes
-	}
-
-	// write the meta object
-	metaBuf, err := proto.Marshal(meta)
-	if err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to proto marshal object meta: %w", err)
-	}
-	tx.Set(metaKey, metaBuf)
-
-	// write all object data chunks
-	for ndx := range meta.NumChunks {
-		start := ndx * maxValBytes
-		end := min((ndx+1)*maxValBytes, length)
-
-		chunkKey, err := s.objectKey(id, ndx)
-		if err != nil {
-			span.RecordError(err)
-			return fmt.Errorf("failed to get object chunk key: %w", err)
-		}
-
-		tx.Set(chunkKey, data[start:end])
-	}
-
-	span.SetStatus(codes.Ok, "writeObject ok")
-	return nil
-}
-
-func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
-	ctx, span := s.tracer.Start(ctx, "deleteObject") // nolint
-	defer span.End()
-
-	// delete the meta object
-	metaKey, err := s.metaKey(id)
-	if err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to get meta key: %w", err)
-	}
-	tx.Clear(metaKey)
-
-	// clear all object chunks
-	begin, err := s.objectKey(id, 0)
-	if err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to get object begin key: %w", err)
-	}
-	end, err := s.objectKey(id, meta.NumChunks-1)
-	if err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to get object start key: %w", err)
-	}
-	tx.ClearRange(fdb.KeyRange{
-		Begin: begin,
-		End:   end,
-	})
-
-	span.SetStatus(codes.Ok, "deleteObject ok")
-	return nil
+	metrics.SpanOK(span)
+	return key, meta, nil
 }
 
 // Returns the associated metadata for an object. Returns nil if the object does not exist.
 func (s *session) getListMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ListMeta, error) {
-	ctx, span := s.tracer.Start(ctx, "getListMeta") // nolint
+	ctx, span := s.tracer.Start(ctx, "getListMeta")
 	defer span.End()
 
-	listKey, err := s.listKey(id)
+	key, objMeta, err := s.getObjectMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
-		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
+		return nil, nil, fmt.Errorf("failed to get object meta: %w", err)
+	}
+	if objMeta == nil {
+		// item does not exist
+		metrics.SpanOK(span)
+		return key, nil, nil
 	}
 
-	metaBuf, err := tx.Get(listKey).Get()
+	listMeta, err := cast[*types.ObjectMeta_List](objMeta.Type)
 	if err != nil {
 		span.RecordError(err)
-		return listKey, nil, fmt.Errorf("failed to get object meta from database: %w", err)
+		return nil, nil, err
 	}
 
-	if len(metaBuf) == 0 {
-		span.SetStatus(codes.Ok, "getList ok")
-		return listKey, nil, nil
-	}
-
-	meta := &types.ListMeta{}
-	if err = proto.Unmarshal(metaBuf, meta); err != nil {
-		span.RecordError(err)
-		return listKey, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
-	}
-
-	span.SetStatus(codes.Ok, "getListMeta ok")
-	return listKey, meta, nil
+	metrics.SpanOK(span)
+	return key, listMeta.List, nil
 }
 
 // Interns, stores, and returns a new UID. The upper 16 bits are a random sequence number, and the lower
@@ -861,7 +724,7 @@ func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, memb
 		return 0, fmt.Errorf("failed to parse uid: %w", err)
 	}
 
-	span.SetStatus(codes.Ok, "getOrAllocateUID ok")
+	metrics.SpanOK(span)
 	return uid, nil
 }
 
@@ -893,7 +756,7 @@ func (s *session) peekUID(ctx context.Context, tx fdb.ReadTransaction, member st
 		return 0, fmt.Errorf("failed to parse uid: %w", err)
 	}
 
-	span.SetStatus(codes.Ok, "peekUID ok")
+	metrics.SpanOK(span)
 	return uid, nil
 }
 
@@ -919,7 +782,7 @@ func (s *session) memberFromUID(ctx context.Context, tx fdb.ReadTransaction, uid
 		return "", err
 	}
 
-	span.SetStatus(codes.Ok, "memberFromUID ok")
+	metrics.SpanOK(span)
 	return string(member), nil
 }
 
