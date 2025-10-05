@@ -358,30 +358,30 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleDecr(ctx, cmd.Args)
 	case "decrby":
 		res, err = s.handleDecrBy(ctx, cmd.Args)
-	case "sadd":
-		res, err = s.handleSetAdd(ctx, cmd.Args)
-	case "srem":
-		res, err = s.handleSetRemove(ctx, cmd.Args)
-	case "sismember":
-		res, err = s.handleSetIsMember(ctx, cmd.Args)
-	case "scard":
-		res, err = s.handleSetCard(ctx, cmd.Args)
-	case "smembers":
-		res, err = s.handleSetMembers(ctx, cmd.Args)
-	case "sinter":
-		res, err = s.handleSetInter(ctx, cmd.Args)
-	case "sunion":
-		res, err = s.handleSetUnion(ctx, cmd.Args)
-	case "sdiff":
-		res, err = s.handleSetDiff(ctx, cmd.Args)
-	case "llen":
-		res, err = s.handleLLen(ctx, cmd.Args)
-	case "lpush":
-		res, err = s.handleLPush(ctx, cmd.Args)
-	case "rpush":
-		res, err = s.handleRPush(ctx, cmd.Args)
-	case "lindex":
-		res, err = s.handleLIndex(ctx, cmd.Args)
+	// case "sadd":
+	// 	res, err = s.handleSetAdd(ctx, cmd.Args)
+	// case "srem":
+	// 	res, err = s.handleSetRemove(ctx, cmd.Args)
+	// case "sismember":
+	// 	res, err = s.handleSetIsMember(ctx, cmd.Args)
+	// case "scard":
+	// 	res, err = s.handleSetCard(ctx, cmd.Args)
+	// case "smembers":
+	// 	res, err = s.handleSetMembers(ctx, cmd.Args)
+	// case "sinter":
+	// 	res, err = s.handleSetInter(ctx, cmd.Args)
+	// case "sunion":
+	// 	res, err = s.handleSetUnion(ctx, cmd.Args)
+	// case "sdiff":
+	// 	res, err = s.handleSetDiff(ctx, cmd.Args)
+	// case "llen":
+	// 	res, err = s.handleLLen(ctx, cmd.Args)
+	// case "lpush":
+	// 	res, err = s.handleLPush(ctx, cmd.Args)
+	// case "rpush":
+	// 	res, err = s.handleRPush(ctx, cmd.Args)
+	// case "lindex":
+	// 	res, err = s.handleLIndex(ctx, cmd.Args)
 	default:
 		err := fmt.Errorf("unknown command %q", cmd.Name)
 		span.RecordError(err)
@@ -548,9 +548,9 @@ func userIsAdmin(user *types.User) bool {
 	return false
 }
 
-// Returns the associated metadata for an object. Returns nil if the object does not exist.
-func (s *session) getObjectMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
-	ctx, span := s.tracer.Start(ctx, "getObjectMeta") // nolint
+// Returns the associated metadata for an object of any type. Returns nil if it not exist.
+func (s *session) getMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
+	ctx, span := s.tracer.Start(ctx, "getMeta") // nolint
 	defer span.End()
 
 	metaKey, err := s.metaKey(id)
@@ -584,7 +584,7 @@ func (s *session) getBasicObject(ctx context.Context, tx fdb.ReadTransaction, id
 	ctx, span := s.tracer.Start(ctx, "getBasicObject")
 	defer span.End()
 
-	_, meta, err := s.getObjectMeta(ctx, tx, id)
+	_, meta, err := s.getMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
 		return nil, nil, err
@@ -632,14 +632,14 @@ func (s *session) writeBasicObject(ctx context.Context, tx fdb.Transaction, id s
 	now := timestamppb.Now()
 
 	// check if the object already exists and should be overwritten
-	metaKey, meta, err := s.getObjectMeta(ctx, tx, id)
+	metaKey, meta, err := s.getMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
 		return err
 	}
 	if meta != nil {
 		// delete then update existing
-		if err := s.deleteObject(ctx, tx, id, meta); err != nil {
+		if err := s.deleteBasicObject(ctx, tx, id, meta); err != nil {
 			span.RecordError(err)
 			return err
 		}
@@ -696,7 +696,7 @@ func (s *session) writeBasicObject(ctx context.Context, tx fdb.Transaction, id s
 	return nil
 }
 
-func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+func (s *session) deleteBasicObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
 	ctx, span := s.tracer.Start(ctx, "deleteObject") // nolint
 	defer span.End()
 
