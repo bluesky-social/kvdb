@@ -564,8 +564,6 @@ func requireArraysEqual(t *testing.T, expected []string, actualResp string) {
 }
 
 func TestSets(t *testing.T) {
-	t.SkipNow()
-
 	require := require.New(t)
 	ctx := t.Context()
 	sess := testSessionWithAuth(t)

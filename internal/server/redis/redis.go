@@ -357,22 +357,22 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleDecr(ctx, cmd.Args)
 	case "decrby":
 		res, err = s.handleDecrBy(ctx, cmd.Args)
-	// case "sadd":
-	// 	res, err = s.handleSetAdd(ctx, cmd.Args)
-	// case "srem":
-	// 	res, err = s.handleSetRemove(ctx, cmd.Args)
-	// case "sismember":
-	// 	res, err = s.handleSetIsMember(ctx, cmd.Args)
-	// case "scard":
-	// 	res, err = s.handleSetCard(ctx, cmd.Args)
-	// case "smembers":
-	// 	res, err = s.handleSetMembers(ctx, cmd.Args)
-	// case "sinter":
-	// 	res, err = s.handleSetInter(ctx, cmd.Args)
-	// case "sunion":
-	// 	res, err = s.handleSetUnion(ctx, cmd.Args)
-	// case "sdiff":
-	// 	res, err = s.handleSetDiff(ctx, cmd.Args)
+	case "sadd":
+		res, err = s.handleSetAdd(ctx, cmd.Args)
+	case "srem":
+		res, err = s.handleSetRemove(ctx, cmd.Args)
+	case "sismember":
+		res, err = s.handleSetIsMember(ctx, cmd.Args)
+	case "scard":
+		res, err = s.handleSetCard(ctx, cmd.Args)
+	case "smembers":
+		res, err = s.handleSetMembers(ctx, cmd.Args)
+	case "sinter":
+		res, err = s.handleSetInter(ctx, cmd.Args)
+	case "sunion":
+		res, err = s.handleSetUnion(ctx, cmd.Args)
+	case "sdiff":
+		res, err = s.handleSetDiff(ctx, cmd.Args)
 	// case "llen":
 	// 	res, err = s.handleLLen(ctx, cmd.Args)
 	// case "lpush":

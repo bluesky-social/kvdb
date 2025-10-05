@@ -31,8 +31,9 @@ message ObjectMeta {
   google.protobuf.Timestamp last_access = 3;
   oneof type {
     BasicObjectMeta basic = 4;
-    ListMeta list = 5;
-    ListItemMeta list_item = 6;
+    SetMeta set = 5;
+    ListMeta list = 6;
+    ListItemMeta list_item = 7;
   }
 }
 
@@ -43,6 +44,8 @@ message BasicObjectMeta {
 
 message SetMeta {
   uint64 num_items = 1;
+  uint32 num_chunks = 2;
+  uint64 size_bytes = 3;
 }
 
 message ListMeta {

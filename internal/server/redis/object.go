@@ -14,8 +14,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *session) getBasicObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
-	ctx, span := s.tracer.Start(ctx, "getBasicObject")
+func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, id string) (*types.ObjectMeta, []byte, error) {
+	ctx, span := s.tracer.Start(ctx, "getObject")
 	defer span.End()
 
 	_, meta, err := s.getMeta(ctx, tx, id)
@@ -28,18 +28,23 @@ func (s *session) getBasicObject(ctx context.Context, tx fdb.ReadTransaction, id
 		return nil, nil, nil
 	}
 
-	basicObjMeta, ok := meta.Type.(*types.ObjectMeta_Basic)
-	if !ok {
-		err := fmt.Errorf("item is not a basic object")
+	// @TODO (jrc): update last_accessed out of band
+	// @TODO (jrc): read all chunks in parallel
+
+	var numChunks uint32
+	switch typ := meta.Type.(type) {
+	case *types.ObjectMeta_Basic:
+		numChunks = typ.Basic.NumChunks
+	case *types.ObjectMeta_Set:
+		numChunks = typ.Set.NumChunks
+	default:
+		err := fmt.Errorf("object of type %T cannot be retreived by getObject", meta.Type)
 		span.RecordError(err)
 		return nil, nil, err
 	}
 
-	// @TODO (jrc): update last_accessed out of band
-	// @TODO (jrc): read all chunks in parallel
-
 	buf := []byte{}
-	for ndx := range basicObjMeta.Basic.NumChunks {
+	for ndx := range numChunks {
 		chunkKey, err := s.objectKey(id, ndx)
 		if err != nil {
 			span.RecordError(err)
@@ -59,8 +64,8 @@ func (s *session) getBasicObject(ctx context.Context, tx fdb.ReadTransaction, id
 	return meta, buf, nil
 }
 
-func (s *session) writeBasicObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
-	ctx, span := s.tracer.Start(ctx, "writeBasicObject")
+func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string, data []byte) error {
+	ctx, span := s.tracer.Start(ctx, "writeObject")
 	defer span.End()
 
 	now := timestamppb.Now()
@@ -73,7 +78,7 @@ func (s *session) writeBasicObject(ctx context.Context, tx fdb.Transaction, id s
 	}
 	if meta != nil {
 		// delete then update existing
-		if err := s.deleteBasicObject(ctx, tx, id, meta); err != nil {
+		if err := s.deleteObject(ctx, tx, id, meta); err != nil {
 			span.RecordError(err)
 			return err
 		}
@@ -130,7 +135,7 @@ func (s *session) writeBasicObject(ctx context.Context, tx fdb.Transaction, id s
 	return nil
 }
 
-func (s *session) deleteBasicObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
+func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id string, meta *types.ObjectMeta) error {
 	ctx, span := s.tracer.Start(ctx, "deleteObject") // nolint
 	defer span.End()
 
@@ -180,7 +185,7 @@ func (s *session) handleGet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	bufAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		_, buf, err := s.getBasicObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, key)
 		return buf, err
 	})
 	if err != nil {
@@ -253,7 +258,7 @@ func (s *session) handleSet(ctx context.Context, args []resp.Value) (string, err
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		return nil, s.writeBasicObject(ctx, tx, key, []byte(val))
+		return nil, s.writeObject(ctx, tx, key, []byte(val))
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to set value: %w", err))
@@ -285,7 +290,7 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 			return false, nil // object does not exist
 		}
 
-		err = s.deleteBasicObject(ctx, tx, key, meta)
+		err = s.deleteObject(ctx, tx, key, meta)
 		if err != nil {
 			return false, err
 		}
@@ -401,7 +406,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 	}
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, buf, err := s.getBasicObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
@@ -417,7 +422,7 @@ func (s *session) handleIncrDecr(ctx context.Context, args []resp.Value, byStr s
 		num += by
 
 		buf = []byte(strconv.FormatInt(num, 10))
-		if err = s.writeBasicObject(ctx, tx, key, buf); err != nil {
+		if err = s.writeObject(ctx, tx, key, buf); err != nil {
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 
@@ -460,7 +465,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 	}
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, buf, err := s.getBasicObject(ctx, tx, key)
+		_, buf, err := s.getObject(ctx, tx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get existing value")
 		}
@@ -476,7 +481,7 @@ func (s *session) handleIncrByFloat(ctx context.Context, args []resp.Value) (str
 		num += by
 
 		buf = []byte(strconv.FormatFloat(num, 'g', -1, 64))
-		if err = s.writeBasicObject(ctx, tx, key, buf); err != nil {
+		if err = s.writeObject(ctx, tx, key, buf); err != nil {
 			return nil, fmt.Errorf("failed to write value to database: %w", err)
 		}
 
