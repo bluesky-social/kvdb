@@ -452,6 +452,66 @@ func (x *SetMeta) GetSizeBytes() uint64 {
 	return 0
 }
 
+type SortedSetMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Set           *SetMeta               `protobuf:"bytes,1,opt,name=set,proto3" json:"set,omitempty"`
+	Min           float32                `protobuf:"fixed32,2,opt,name=min,proto3" json:"min,omitempty"`
+	Max           float32                `protobuf:"fixed32,3,opt,name=max,proto3" json:"max,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SortedSetMeta) Reset() {
+	*x = SortedSetMeta{}
+	mi := &file_redis_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SortedSetMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SortedSetMeta) ProtoMessage() {}
+
+func (x *SortedSetMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SortedSetMeta.ProtoReflect.Descriptor instead.
+func (*SortedSetMeta) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SortedSetMeta) GetSet() *SetMeta {
+	if x != nil {
+		return x.Set
+	}
+	return nil
+}
+
+func (x *SortedSetMeta) GetMin() float32 {
+	if x != nil {
+		return x.Min
+	}
+	return 0
+}
+
+func (x *SortedSetMeta) GetMax() float32 {
+	if x != nil {
+		return x.Max
+	}
+	return 0
+}
+
 type ListMeta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NumItems      uint64                 `protobuf:"varint,1,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
@@ -463,7 +523,7 @@ type ListMeta struct {
 
 func (x *ListMeta) Reset() {
 	*x = ListMeta{}
-	mi := &file_redis_proto_msgTypes[5]
+	mi := &file_redis_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -475,7 +535,7 @@ func (x *ListMeta) String() string {
 func (*ListMeta) ProtoMessage() {}
 
 func (x *ListMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[5]
+	mi := &file_redis_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -488,7 +548,7 @@ func (x *ListMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMeta.ProtoReflect.Descriptor instead.
 func (*ListMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{5}
+	return file_redis_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListMeta) GetNumItems() uint64 {
@@ -525,7 +585,7 @@ type ListItemMeta struct {
 
 func (x *ListItemMeta) Reset() {
 	*x = ListItemMeta{}
-	mi := &file_redis_proto_msgTypes[6]
+	mi := &file_redis_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -537,7 +597,7 @@ func (x *ListItemMeta) String() string {
 func (*ListItemMeta) ProtoMessage() {}
 
 func (x *ListItemMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[6]
+	mi := &file_redis_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -550,7 +610,7 @@ func (x *ListItemMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListItemMeta.ProtoReflect.Descriptor instead.
 func (*ListItemMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{6}
+	return file_redis_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListItemMeta) GetId() string {
@@ -625,7 +685,11 @@ const file_redis_proto_rawDesc = "" +
 	"\n" +
 	"num_chunks\x18\x02 \x01(\rR\tnumChunks\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\"a\n" +
+	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\"U\n" +
+	"\rSortedSetMeta\x12 \n" +
+	"\x03set\x18\x01 \x01(\v2\x0e.types.SetMetaR\x03set\x12\x10\n" +
+	"\x03min\x18\x02 \x01(\x02R\x03min\x12\x10\n" +
+	"\x03max\x18\x03 \x01(\x02R\x03max\"a\n" +
 	"\bListMeta\x12\x1b\n" +
 	"\tnum_items\x18\x01 \x01(\x04R\bnumItems\x12\x1b\n" +
 	"\titem_head\x18\x02 \x01(\tR\bitemHead\x12\x1b\n" +
@@ -657,7 +721,7 @@ func file_redis_proto_rawDescGZIP() []byte {
 }
 
 var file_redis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_redis_proto_goTypes = []any{
 	(UserAccessLevel)(0),          // 0: types.UserAccessLevel
 	(*User)(nil),                  // 1: types.User
@@ -665,27 +729,29 @@ var file_redis_proto_goTypes = []any{
 	(*ObjectMeta)(nil),            // 3: types.ObjectMeta
 	(*BasicObjectMeta)(nil),       // 4: types.BasicObjectMeta
 	(*SetMeta)(nil),               // 5: types.SetMeta
-	(*ListMeta)(nil),              // 6: types.ListMeta
-	(*ListItemMeta)(nil),          // 7: types.ListItemMeta
-	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(*SortedSetMeta)(nil),         // 6: types.SortedSetMeta
+	(*ListMeta)(nil),              // 7: types.ListMeta
+	(*ListItemMeta)(nil),          // 8: types.ListItemMeta
+	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
 }
 var file_redis_proto_depIdxs = []int32{
-	8,  // 0: types.User.created:type_name -> google.protobuf.Timestamp
-	8,  // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
+	9,  // 0: types.User.created:type_name -> google.protobuf.Timestamp
+	9,  // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
 	2,  // 2: types.User.rules:type_name -> types.UserACLRule
 	0,  // 3: types.UserACLRule.level:type_name -> types.UserAccessLevel
-	8,  // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
-	8,  // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
-	8,  // 6: types.ObjectMeta.expires:type_name -> google.protobuf.Timestamp
+	9,  // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
+	9,  // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
+	9,  // 6: types.ObjectMeta.expires:type_name -> google.protobuf.Timestamp
 	4,  // 7: types.ObjectMeta.basic:type_name -> types.BasicObjectMeta
 	5,  // 8: types.ObjectMeta.set:type_name -> types.SetMeta
-	6,  // 9: types.ObjectMeta.list:type_name -> types.ListMeta
-	7,  // 10: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	7,  // 9: types.ObjectMeta.list:type_name -> types.ListMeta
+	8,  // 10: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
+	5,  // 11: types.SortedSetMeta.set:type_name -> types.SetMeta
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_redis_proto_init() }
@@ -705,7 +771,7 @@ func file_redis_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_redis_proto_rawDesc), len(file_redis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

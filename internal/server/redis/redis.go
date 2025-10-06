@@ -151,16 +151,17 @@ type session struct {
 	dirs *Directories
 
 	// Only set once the user has authenticated
-	user   *sessionUser
+	user   *userSession
 	userMu *sync.RWMutex
 }
 
-type sessionUser struct {
+type userSession struct {
 	objDir        directory.DirectorySubspace
 	metaDir       directory.DirectorySubspace
 	uidDir        directory.DirectorySubspace
 	reverseUIDDir directory.DirectorySubspace
 	listDir       directory.DirectorySubspace
+	zsetDir       directory.DirectorySubspace
 
 	user *types.User
 }
@@ -245,6 +246,18 @@ func (s *session) uidKey(id string) (fdb.Key, error) {
 	}
 
 	return s.user.uidDir.Pack(tuple.Tuple{id}), nil
+}
+
+// Returns the FDB directory
+func (s *session) sortedSetScoreDir(key string) (directory.DirectorySubspace, error) {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+
+	if s.user == nil {
+		return nil, fmt.Errorf("authentication is required")
+	}
+
+	return s.user.zsetDir.CreateOrOpen(s.fdb, []string{key}, nil)
 }
 
 // Returns the FDB key of an object in the per-user uid directory
@@ -382,6 +395,10 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetUnion(ctx, cmd.Args)
 	case "sdiff":
 		res, err = s.handleSetDiff(ctx, cmd.Args)
+	case "zadd":
+		res, err = s.handleZAdd(ctx, cmd.Args)
+	case "zcard":
+		res, err = s.handleSetCard(ctx, cmd.Args)
 	case "llen":
 		res, err = s.handleLLen(ctx, cmd.Args)
 	case "lpush":

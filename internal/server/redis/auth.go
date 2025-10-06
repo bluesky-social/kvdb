@@ -117,13 +117,19 @@ func (s *session) setSessionUser(user *types.User) error {
 		return fmt.Errorf("failed to initialize user list directory: %w", err)
 	}
 
+	zsetDir, err := userDir.CreateOrOpen(s.fdb, []string{"zset"}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to initialize user zset directory: %w", err)
+	}
+
 	s.userMu.Lock()
-	s.user = &sessionUser{
+	s.user = &userSession{
 		objDir:        objDir,
 		metaDir:       metaDir,
 		uidDir:        uidDir,
 		reverseUIDDir: reverseUIDDir,
 		listDir:       listDir,
+		zsetDir:       zsetDir,
 		user:          user,
 	}
 	s.userMu.Unlock()

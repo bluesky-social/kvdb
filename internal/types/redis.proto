@@ -48,6 +48,12 @@ message SetMeta {
   uint64 size_bytes = 3;
 }
 
+message SortedSetMeta {
+  SetMeta set = 1;
+  float min = 2;
+  float max = 3;
+}
+
 message ListMeta {
   uint64 num_items = 1;
   string item_head = 2;
