@@ -28,13 +28,12 @@ enum UserAccessLevel {
 message ObjectMeta {
   google.protobuf.Timestamp created = 1;
   google.protobuf.Timestamp updated = 2;
-  google.protobuf.Timestamp last_access = 3;
-  optional google.protobuf.Timestamp expires = 4;
+  optional google.protobuf.Timestamp expires = 3;
   oneof type {
-    BasicObjectMeta basic = 5;
-    SetMeta set = 6;
-    ListMeta list = 7;
-    ListItemMeta list_item = 8;
+    BasicObjectMeta basic = 4;
+    SetMeta set = 5;
+    ListMeta list = 6;
+    ListItemMeta list_item = 7;
   }
 }
 

@@ -35,8 +35,6 @@ func (s *session) handleLLen(ctx context.Context, args []resp.Value) (string, er
 			return uint64(0), nil
 		}
 
-		// @TODO (jrc): update last_accessed out of band
-
 		return listMeta.NumItems, nil
 	})
 	if err != nil {
@@ -113,7 +111,6 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 			}
 		}
 		objMeta.Updated = now
-		objMeta.LastAccess = now
 
 		objMetaList, err := cast[*types.ObjectMeta_List](objMeta.Type)
 		if err != nil {
@@ -267,8 +264,6 @@ func (s *session) handleLIndex(ctx context.Context, args []resp.Value) (string, 
 		if listMeta == nil {
 			return nil, nil
 		}
-
-		// @TODO (jrc): update last_accessed out of band
 
 		targetNdx := index
 		if targetNdx < 0 {

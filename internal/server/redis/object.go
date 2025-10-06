@@ -74,8 +74,6 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, kind ob
 		return nil, nil, nil
 	}
 
-	// @TODO (jrc): update last_accessed out of band
-
 	if meta.Expires != nil {
 		if time.Now().After(meta.Expires.AsTime()) {
 			metrics.SpanOK(span)
@@ -145,7 +143,6 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 	}
 
 	meta.Updated = now
-	meta.LastAccess = now
 
 	// set the new number of chunks
 	const maxValBytes = 100_000
