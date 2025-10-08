@@ -12,6 +12,7 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/bluesky-social/go-util/pkg/concurrent"
 	"github.com/bluesky-social/kvdb/internal/metrics"
+	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
 )
 
@@ -50,7 +51,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 }
 
 func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key string, members []string, scores []float32) (int64, error) {
-	// allocate a new UID for each member
+	// look up or allocate a new UID for each set member
 	uids := make([]uint64, 0, len(members))
 	for _, member := range members {
 		uid, err := s.getOrAllocateUID(ctx, tx, member)
@@ -93,25 +94,6 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key 
 
 	if err = s.writeObject(ctx, tx, key, objectKindSet, data); err != nil {
 		return 0, fmt.Errorf("failed to write set: %w", err)
-	}
-
-	// if the set is a sorted set, we should store the sorted list of scores
-	// in this set's score directory
-	if len(scores) > 0 {
-		if len(scores) != len(uids) {
-			return 0, fmt.Errorf("number of scores does not match number of uids")
-		}
-
-		scoreDir, err := s.sortedSetScoreDir(key)
-		if err != nil {
-			return 0, fmt.Errorf("failed to open score dir: %w", err)
-		}
-
-		for ndx, score := range scores {
-			scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(score)})
-			uidStr := strconv.FormatUint(uids[ndx], 10)
-			tx.Set(scoreKey, []byte(uidStr))
-		}
 	}
 
 	return added, nil
@@ -542,6 +524,10 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 		return "", recordErr(span, err)
 	}
 
+	if len(args)%2 != 1 {
+		return "", recordErr(span, fmt.Errorf("invalid number of arguments"))
+	}
+
 	key, err := extractStringArg(args[0])
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
@@ -574,7 +560,32 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 	}
 
 	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		return s.createOrAddToSet(ctx, tx, key, members, scores)
+		numAdded, err := s.createOrAddToSet(ctx, tx, key, members, scores)
+		if err != nil {
+			return 0, err
+		}
+
+		scoreDir, err := s.sortedSetScoreDir(key)
+		if err != nil {
+			return 0, fmt.Errorf("failed to open score dir: %w", err)
+		}
+
+		for ndx, score := range scores {
+			// clear the previous priority value for this item, if any
+			member := members[ndx]
+			meta := &types.BasicObjectMeta{}
+			exists, _, err := s.getMeta(ctx, tx, member, meta)
+			if err != nil {
+				return 0, fmt.Errorf("failed to get member meta: %w", err)
+			}
+			if exists {
+			}
+
+			scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(score)})
+			tx.Set(scoreKey, []byte(members[ndx]))
+		}
+
+		return numAdded, nil
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
