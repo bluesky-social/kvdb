@@ -783,30 +783,29 @@ func (s *session) peekUID(ctx context.Context, tx fdb.ReadTransaction, member st
 	return uid, nil
 }
 
-func (s *session) memberFromUID(ctx context.Context, tx fdb.ReadTransaction, uid uint64) (string, error) {
+func (s *session) memberFromUID(ctx context.Context, tx fdb.ReadTransaction, uid uint64) (*types.UIDItem, error) {
 	ctx, span := s.tracer.Start(ctx, "memberFromUID") // nolint
 	defer span.End()
 
 	key, err := s.uidKey(strconv.FormatUint(uid, 10))
 	if err != nil {
 		span.RecordError(err)
-		return "", fmt.Errorf("failed to get uid key: %w", err)
+		return nil, fmt.Errorf("failed to get uid key: %w", err)
 	}
 
-	member, err := tx.Get(key).Get()
+	member := &types.UIDItem{}
+	exists, err := getProtoItem(tx, key, member)
 	if err != nil {
-		span.RecordError(err)
-		return "", fmt.Errorf("failed to get member for UID %d: %w", uid, err)
+		return nil, err
 	}
-
-	if len(member) == 0 {
+	if !exists {
 		err := fmt.Errorf("uid %d not found", uid)
 		span.RecordError(err)
-		return "", err
+		return nil, err
 	}
 
 	metrics.SpanOK(span)
-	return string(member), nil
+	return member, nil
 }
 
 func parseVariadicArguments(args []resp.Value) ([]string, error) {

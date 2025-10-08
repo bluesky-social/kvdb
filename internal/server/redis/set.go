@@ -343,14 +343,20 @@ func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (stri
 		uids := bitmap.ToArray()
 
 		r := concurrent.New[uint64, string]()
-		members, err := r.Do(ctx, uids, func(uid uint64) (string, error) {
+		members, err := r.Do(ctx, uids, func(uid uint64) (member string, err error) {
 			defer func() {
 				if r := recover(); r != nil {
 					err = recoverErr("retreiving members from uids", r)
 				}
 			}()
 
-			return s.memberFromUID(ctx, tx, uid)
+			m, err := s.memberFromUID(ctx, tx, uid)
+			if err != nil {
+				return "", fmt.Errorf("failed to get member from uid: %w", err)
+			}
+
+			member = m.Member
+			return
 		})
 		if err != nil {
 			return []string{}, fmt.Errorf("failed to get member from uid: %w", err)
@@ -506,7 +512,13 @@ func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value
 				}
 			}()
 
-			return s.memberFromUID(ctx, tx, uid)
+			m, err := s.memberFromUID(ctx, tx, uid)
+			if err != nil {
+				return "", fmt.Errorf("failed to get member from uid: %w", err)
+			}
+
+			member = m.Member
+			return
 		})
 		if err != nil {
 			return nil, recordErr(span, fmt.Errorf("failed to get members for UIDs: %w", err))
