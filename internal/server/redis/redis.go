@@ -397,6 +397,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleSetDiff(ctx, cmd.Args)
 	case "zadd":
 		res, err = s.handleZAdd(ctx, cmd.Args)
+	case "zcount":
+		res, err = s.handleZCount(ctx, cmd.Args)
 	case "zcard":
 		res, err = s.handleSetCard(ctx, cmd.Args)
 	case "llen":

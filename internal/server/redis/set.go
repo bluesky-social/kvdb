@@ -607,7 +607,7 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 }
 
 // Encodes a floating point sorted set score lexicographically so we can store them in sorted order
-func encodeSortedSetScore(score float32) []byte {
+func encodeSortedSetScore(score float32) string {
 	bits := math.Float32bits(score)
 	if score >= 0 {
 		// flip the sign bit so positive numbers are sorted after negative ones
@@ -620,5 +620,94 @@ func encodeSortedSetScore(score float32) []byte {
 	// big endian ensures correct sort order
 	buf := make([]byte, 4)
 	binary.BigEndian.PutUint32(buf, bits)
-	return buf
+	return string(buf)
+}
+
+func (s *session) handleZCount(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleZCount") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 3); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	startStr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse start argument: %w", err))
+	}
+	startRaw, err := strconv.ParseFloat(startStr, 32)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid start argument: %w", err))
+	}
+	start := encodeSortedSetScore(float32(startRaw))
+
+	endStr, err := extractStringArg(args[2])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse end argument: %w", err))
+	}
+	endRaw, err := strconv.ParseFloat(endStr, 32)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid end argument: %w", err))
+	}
+	end := encodeSortedSetScore(float32(endRaw))
+
+	countAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		dir, err := s.sortedSetScoreDir(key)
+		if err != nil {
+			return uint64(0), fmt.Errorf("failed to get sorted set score dir: %w", err)
+		}
+
+		const limit = 1000
+		beginRange, endRange := dir.FDBRangeKeys()
+		rangeResult := tx.GetRange(fdb.KeyRange{Begin: beginRange, End: endRange}, fdb.RangeOptions{})
+
+		count := uint64(0)
+		it := rangeResult.Iterator()
+		for it.Advance() {
+			kv, err := it.Get()
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to iterate over key range: %w", err)
+			}
+
+			// convert the key tuple to a string
+			tup, err := dir.Unpack(kv.Key)
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to unpack tuple: %w", err)
+			}
+			if len(tup) != 1 {
+				return uint64(0), fmt.Errorf("invalid tuple length")
+			}
+			key, err := cast[string](tup[0])
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to cast tuple key: %w", err)
+			}
+
+			if key < start {
+				continue // out of range but not done yet
+			}
+			if key > end {
+				break // out of range and we're done
+			}
+
+			count += 1
+		}
+
+		return count, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get sorted set count: %w", err))
+	}
+
+	count, err := cast[uint64](countAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	metrics.SpanOK(span)
+	return resp.FormatUint(count), nil
 }
