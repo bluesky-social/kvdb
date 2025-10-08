@@ -36,23 +36,23 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		numAdded, _, err := s.createOrAddToSet(ctx, tx, key, members, nil)
+		numAdded, _, err := s.createOrAddToSet(ctx, tx, objectKindSet, key, members, nil)
 		return numAdded, err
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
 	}
 
-	added, err := cast[int64](addedAny)
+	added, err := cast[uint64](addedAny)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
 	metrics.SpanOK(span)
-	return resp.FormatInt(added), nil
+	return resp.FormatUint(added), nil
 }
 
-func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key string, members []string, scores []float32) (int64, []uint64, error) {
+func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, kind objectKind, key string, members []string, scores []float32) (uint64, []uint64, error) {
 	useScores := len(scores) > 0
 	if useScores && len(members) != len(scores) {
 		return 0, nil, fmt.Errorf("number of members does not match number of scores")
@@ -75,9 +75,23 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key 
 	}
 
 	// get the bitmap if it exists
-	_, blob, err := s.getObject(ctx, tx, objectKindSet, key)
+	meta, blob, err := s.getObject(ctx, tx, kind, key)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to get existing set: %w", err)
+	}
+
+	if meta != nil {
+		// ensure that you can't sadd to a sorted set and vice versa
+		kindOK := false
+		switch meta.Type.(type) {
+		case *types.ObjectMeta_Set:
+			kindOK = kind == objectKindSet
+		case *types.ObjectMeta_SortedSet:
+			kindOK = kind == objectKindSortedSet
+		}
+		if !kindOK {
+			return 0, nil, errWrongKind
+		}
 	}
 
 	// if the key doesn't exist, create a new bitmap
@@ -89,7 +103,7 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key 
 	}
 
 	// diff against the existing map to determine how many members are new
-	added := int64(0)
+	added := uint64(0)
 	for _, uid := range uids {
 		if !bitmap.Contains(uid) {
 			added += 1
@@ -105,7 +119,7 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key 
 		return 0, nil, fmt.Errorf("failed to marshal bitmap: %w", err)
 	}
 
-	if err = s.writeObject(ctx, tx, key, objectKindSet, data); err != nil {
+	if err = s.writeObject(ctx, tx, key, kind, data); err != nil {
 		return 0, nil, fmt.Errorf("failed to write set: %w", err)
 	}
 
@@ -592,7 +606,7 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 	}
 
 	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		numAdded, uids, err := s.createOrAddToSet(ctx, tx, key, members, scores)
+		numAdded, uids, err := s.createOrAddToSet(ctx, tx, objectKindSortedSet, key, members, scores)
 		if err != nil {
 			return uint64(0), err
 		}
@@ -640,7 +654,7 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 	}
 
 	metrics.SpanOK(span)
-	return resp.FormatInt(int64(added)), nil
+	return resp.FormatUint(added), nil
 }
 
 // Encodes a floating point sorted set score lexicographically so we can store them in sorted order
