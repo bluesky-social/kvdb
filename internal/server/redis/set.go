@@ -9,6 +9,7 @@ import (
 
 	roaring "github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/bluesky-social/go-util/pkg/concurrent"
 	"github.com/bluesky-social/kvdb/internal/metrics"
@@ -160,7 +161,7 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 			return nil, recordErr(span, fmt.Errorf("failed to get uids for members: %w", err))
 		}
 
-		return s.removeFromSet(ctx, tx, key, uids)
+		return s.removeFromSet(ctx, tx, objectKindSet, key, uids)
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
@@ -175,12 +176,12 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 	return resp.FormatUint(removed), nil
 }
 
-func (s *session) removeFromSet(ctx context.Context, tx fdb.Transaction, key string, uids []uint64) (uint64, error) {
+func (s *session) removeFromSet(ctx context.Context, tx fdb.Transaction, kind objectKind, key string, uids []uint64) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "removeFromSet")
 	defer span.End()
 
 	// get the bitmap if it exists
-	objMeta, blob, err := s.getObject(ctx, tx, objectKindSet, key)
+	objMeta, blob, err := s.getObject(ctx, tx, kind, key)
 	if err != nil {
 		return uint64(0), fmt.Errorf("failed to get existing set: %w", err)
 	}
@@ -195,12 +196,33 @@ func (s *session) removeFromSet(ctx context.Context, tx fdb.Transaction, key str
 		return uint64(0), fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
 	}
 
+	var scoreDir directory.DirectorySubspace
+	if kind == objectKindSortedSet {
+		scoreDir, err = s.sortedSetScoreDir(key)
+		if err != nil {
+			return 0, fmt.Errorf("failed to open score dir: %w", err)
+		}
+	}
+
 	// remove from the bitmap and count
 	removed := uint64(0)
 	for _, uid := range uids {
 		if bitmap.Contains(uid) {
 			bitmap.Remove(uid)
 			removed++
+		}
+
+		// find and delete the score in the sorted directory
+		if kind == objectKindSortedSet {
+			member, err := s.memberFromUID(ctx, tx, uid)
+			if err != nil {
+				return 0, fmt.Errorf("failed to get set member info from uid: %w", err)
+			}
+
+			if member.Score != nil {
+				scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(*member.Score)})
+				tx.Clear(scoreKey)
+			}
 		}
 	}
 
@@ -218,7 +240,7 @@ func (s *session) removeFromSet(ctx context.Context, tx fdb.Transaction, key str
 		return uint64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
 	}
 
-	if err = s.writeObject(ctx, tx, key, objectKindSet, data); err != nil {
+	if err = s.writeObject(ctx, tx, key, kind, data); err != nil {
 		return uint64(0), fmt.Errorf("failed to write set: %w", err)
 	}
 
@@ -562,6 +584,14 @@ func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value
 	return resp.FormatArrayOfBulkStrings(members), nil
 }
 
+// @TODO (jrc): add the ability to have multiple items under a single score
+//
+// 127.0.0.1:6380> zadd z 10 10
+// (integer) 1
+// 127.0.0.1:6380> zadd z 10 101
+// (integer) 1
+// 127.0.0.1:6380> zcount z -inf +inf
+// (integer) 2
 func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleZAdd")
 	defer span.End()
@@ -856,10 +886,10 @@ func (s *session) handleZRemRangeByScore(ctx context.Context, args []resp.Value)
 		}
 
 		// remove the all items from the set
-		return s.removeFromSet(ctx, tx, key, uids)
+		return s.removeFromSet(ctx, tx, objectKindSortedSet, key, uids)
 	})
 	if err != nil {
-		return "", recordErr(span, fmt.Errorf("failed to get remove from sorted set: %w", err))
+		return "", recordErr(span, fmt.Errorf("failed to remove from sorted set: %w", err))
 	}
 
 	count, err := cast[uint64](countAny)

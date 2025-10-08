@@ -46,7 +46,7 @@ func getNumChunks(meta *types.ObjectMeta, kind gt.Option[objectKind]) (uint32, e
 		objKind = objectKindSet
 		numChunks = typ.Set.NumChunks
 	case *types.ObjectMeta_SortedSet:
-		objKind = objectKindSet
+		objKind = objectKindSortedSet
 		numChunks = typ.SortedSet.NumChunks
 	case *types.ObjectMeta_ListItem:
 		objKind = objectKindListItem
@@ -225,10 +225,7 @@ func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id strin
 		span.RecordError(err)
 		return fmt.Errorf("failed to get object start key: %w", err)
 	}
-	tx.ClearRange(fdb.KeyRange{
-		Begin: begin,
-		End:   end,
-	})
+	tx.ClearRange(fdb.KeyRange{Begin: begin, End: end})
 
 	metrics.SpanOK(span)
 	return nil
@@ -356,6 +353,17 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 		err = s.deleteObject(ctx, tx, key, meta)
 		if err != nil {
 			return false, err
+		}
+
+		// if we're deleting a sorted set, also clear its score directory
+		if _, ok := meta.Type.(*types.ObjectMeta_SortedSet); ok {
+			scoreDir, err := s.sortedSetScoreDir(key)
+			if err != nil {
+				return false, fmt.Errorf("failed to get sorted set score directory: %w", err)
+			}
+
+			begin, end := scoreDir.FDBRangeKeys()
+			tx.ClearRange(fdb.KeyRange{Begin: begin, End: end})
 		}
 
 		return true, nil

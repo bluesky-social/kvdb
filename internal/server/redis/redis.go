@@ -722,13 +722,13 @@ func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, item
 
 	if len(val) == 0 {
 		// allocate a new UID for this member string
-		uid, err := s.allocateNewUID(ctx, tx)
+		item.Uid, err = s.allocateNewUID(ctx, tx)
 		if err != nil {
 			span.RecordError(err)
 			return 0, fmt.Errorf("failed to allocate new uid: %w", err)
 		}
 
-		uidStr := strconv.FormatUint(uid, 10)
+		uidStr := strconv.FormatUint(item.Uid, 10)
 		uidToMemberKey, err := s.uidKey(uidStr)
 		if err != nil {
 			span.RecordError(err)
