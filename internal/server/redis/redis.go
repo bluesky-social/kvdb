@@ -399,6 +399,8 @@ func (s *session) handleCommand(ctx context.Context, cmd *resp.Command) string {
 		res, err = s.handleZAdd(ctx, cmd.Args)
 	case "zcount":
 		res, err = s.handleZCount(ctx, cmd.Args)
+	case "zremrangebyscore":
+		res, err = s.handleZRemRangeByScore(ctx, cmd.Args)
 	case "zcard":
 		res, err = s.handleSetCard(ctx, cmd.Args)
 	case "llen":
@@ -699,7 +701,8 @@ func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint6
 	return newUID, nil
 }
 
-// Returns the UID for the given member string, creating a new one if it does not exist
+// Returns the UID for the given member string, creating a new one if it does not exist. If peek is true, it
+// will refuse to create a new UID if one does not already exist.
 func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, item *types.UIDItem) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "getOrAllocateUID")
 	defer span.End()
