@@ -32,9 +32,8 @@ message ObjectMeta {
   oneof type {
     BasicObjectMeta basic = 4;
     SetMeta set = 5;
-    SortedSetMeta sorted_set = 6;
-    ListMeta list = 7;
-    ListItemMeta list_item = 8;
+    ListMeta list = 6;
+    ListItemMeta list_item = 7;
   }
 }
 
@@ -47,12 +46,6 @@ message SetMeta {
   uint64 num_items = 1;
   uint32 num_chunks = 2;
   uint64 size_bytes = 3;
-}
-
-message SortedSetMeta {
-  SetMeta set = 1;
-  float min_score = 2;
-  float max_score = 3;
 }
 
 message ListMeta {

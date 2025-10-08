@@ -662,7 +662,6 @@ func (s *session) handleZCount(ctx context.Context, args []resp.Value) (string, 
 			return uint64(0), fmt.Errorf("failed to get sorted set score dir: %w", err)
 		}
 
-		const limit = 1000
 		beginRange, endRange := dir.FDBRangeKeys()
 		rangeResult := tx.GetRange(fdb.KeyRange{Begin: beginRange, End: endRange}, fdb.RangeOptions{})
 

@@ -23,7 +23,6 @@ type objectKind int64
 const (
 	objectKindBasic objectKind = 1 << iota
 	objectKindSet
-	objectKindSortedSet
 	objectKindList
 	objectKindListItem
 )
@@ -45,9 +44,6 @@ func getNumChunks(meta *types.ObjectMeta, kind gt.Option[objectKind]) (uint32, e
 	case *types.ObjectMeta_Set:
 		objKind = objectKindSet
 		numChunks = typ.Set.NumChunks
-	case *types.ObjectMeta_SortedSet:
-		objKind = objectKindSet
-		numChunks = typ.SortedSet.Set.NumChunks
 	case *types.ObjectMeta_ListItem:
 		objKind = objectKindListItem
 		numChunks = typ.ListItem.NumChunks
@@ -141,10 +137,6 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 			meta.Type = &types.ObjectMeta_Basic{Basic: &types.BasicObjectMeta{}}
 		case objectKindSet:
 			meta.Type = &types.ObjectMeta_Set{Set: &types.SetMeta{}}
-		case objectKindSortedSet:
-			meta.Type = &types.ObjectMeta_SortedSet{SortedSet: &types.SortedSetMeta{
-				Set: &types.SetMeta{},
-			}}
 		case objectKindListItem:
 			meta.Type = &types.ObjectMeta_ListItem{ListItem: &types.ListItemMeta{}}
 		}
@@ -165,8 +157,6 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 		typ.Basic.NumChunks = numChunks
 	case *types.ObjectMeta_Set:
 		typ.Set.NumChunks = numChunks
-	case *types.ObjectMeta_SortedSet:
-		typ.SortedSet.Set.NumChunks = numChunks
 	case *types.ObjectMeta_ListItem:
 		typ.ListItem.NumChunks = numChunks
 	}
