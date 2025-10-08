@@ -35,7 +35,8 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		return s.createOrAddToSet(ctx, tx, key, members, nil)
+		numAdded, _, err := s.createOrAddToSet(ctx, tx, key, members, nil)
+		return numAdded, err
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
@@ -50,13 +51,13 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 	return resp.FormatInt(added), nil
 }
 
-func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key string, members []string, scores []float32) (int64, error) {
+func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key string, members []string, scores []float32) (int64, []uint64, error) {
 	// look up or allocate a new UID for each set member
 	uids := make([]uint64, 0, len(members))
 	for _, member := range members {
 		uid, err := s.getOrAllocateUID(ctx, tx, member)
 		if err != nil {
-			return 0, fmt.Errorf("failed to get uid for member: %w", err)
+			return 0, nil, fmt.Errorf("failed to get uid for member: %w", err)
 		}
 		uids = append(uids, uid)
 	}
@@ -64,14 +65,14 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key 
 	// get the bitmap if it exists
 	_, blob, err := s.getObject(ctx, tx, objectKindSet, key)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get existing set: %w", err)
+		return 0, nil, fmt.Errorf("failed to get existing set: %w", err)
 	}
 
 	// if the key doesn't exist, create a new bitmap
 	bitmap := roaring.New()
 	if len(blob) > 0 {
 		if err := bitmap.UnmarshalBinary(blob); err != nil {
-			return 0, fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+			return 0, nil, fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
 		}
 	}
 
@@ -89,14 +90,14 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key 
 	// serialize and store the updated bitmap
 	data, err := bitmap.MarshalBinary()
 	if err != nil {
-		return 0, fmt.Errorf("failed to marshal bitmap: %w", err)
+		return 0, nil, fmt.Errorf("failed to marshal bitmap: %w", err)
 	}
 
 	if err = s.writeObject(ctx, tx, key, objectKindSet, data); err != nil {
-		return 0, fmt.Errorf("failed to write set: %w", err)
+		return 0, nil, fmt.Errorf("failed to write set: %w", err)
 	}
 
-	return added, nil
+	return added, uids, nil
 }
 
 func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (string, error) {
@@ -560,7 +561,7 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 	}
 
 	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		numAdded, err := s.createOrAddToSet(ctx, tx, key, members, scores)
+		numAdded, uids, err := s.createOrAddToSet(ctx, tx, key, members, scores)
 		if err != nil {
 			return 0, err
 		}
@@ -572,17 +573,39 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 
 		for ndx, score := range scores {
 			// clear the previous priority value for this item, if any
-			member := members[ndx]
-			meta := &types.BasicObjectMeta{}
-			exists, _, err := s.getMeta(ctx, tx, member, meta)
+			metaKey, meta, err := s.getMeta(ctx, tx, members[ndx])
 			if err != nil {
-				return 0, fmt.Errorf("failed to get member meta: %w", err)
+				return 0, fmt.Errorf("failed to get sorted set item meta: %w", err)
 			}
-			if exists {
+			if meta == nil {
+				return 0, fmt.Errorf("failed to get sorted set item meta: not found")
 			}
 
+			switch typ := meta.Type.(type) {
+			case *types.ObjectMeta_Basic:
+				// alter the metadata for this object to ensure it's stored
+				// as a sorted set item rather than a basic object
+				meta.Type = &types.ObjectMeta_SortedSetItem{
+					SortedSetItem: &types.SortedSetItemMeta{
+						Object: typ.Basic,
+						Score:  score,
+					},
+				}
+			case *types.ObjectMeta_SortedSetItem:
+				typ.SortedSetItem.Score = score
+			default:
+				return 0, fmt.Errorf("unsupported object meta type: %T", meta.Type)
+			}
+
+			// store the updated meta ietam
+			if err := setProtoItem(tx, metaKey, meta); err != nil {
+				return 0, fmt.Errorf("failed to write sorted set item meta: %w", err)
+			}
+
+			// store the sortable score -> UID mapping
 			scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(score)})
-			tx.Set(scoreKey, []byte(members[ndx]))
+			uidStr := strconv.FormatUint(uids[ndx], 10)
+			tx.Set(scoreKey, []byte(uidStr))
 		}
 
 		return numAdded, nil

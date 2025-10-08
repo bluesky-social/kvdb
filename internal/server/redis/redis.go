@@ -569,53 +569,35 @@ func userIsAdmin(user *types.User) bool {
 	return false
 }
 
-func (s *session) getMeta(ctx context.Context, tx fdb.ReadTransaction, id string, meta proto.Message) (bool, fdb.Key, error) {
+func (s *session) getMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
 	ctx, span := s.tracer.Start(ctx, "getMeta") // nolint
 	defer span.End()
 
 	metaKey, err := s.metaKey(id)
 	if err != nil {
 		span.RecordError(err)
-		return false, nil, fmt.Errorf("failed to get meta key: %w", err)
+		return nil, nil, fmt.Errorf("failed to get meta key: %w", err)
 	}
 
 	metaBuf, err := tx.Get(metaKey).Get()
 	if err != nil {
 		span.RecordError(err)
-		return false, metaKey, fmt.Errorf("failed to get object meta: %w", err)
+		return nil, nil, fmt.Errorf("failed to get object meta: %w", err)
 	}
 
 	if len(metaBuf) == 0 {
 		metrics.SpanOK(span)
-		return false, metaKey, nil
+		return metaKey, nil, nil
 	}
-
-	if err = proto.Unmarshal(metaBuf, meta); err != nil {
-		span.RecordError(err)
-		return false, metaKey, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
-	}
-
-	metrics.SpanOK(span)
-	return true, metaKey, nil
-}
-
-// Returns the associated metadata for an object of any type. Returns nil if it not exist.
-func (s *session) getObjectMeta(ctx context.Context, tx fdb.ReadTransaction, id string) (fdb.Key, *types.ObjectMeta, error) {
-	ctx, span := s.tracer.Start(ctx, "getObjectMeta")
-	defer span.End()
 
 	meta := &types.ObjectMeta{}
-	exists, key, err := s.getMeta(ctx, tx, id, meta)
-	if err != nil {
+	if err = proto.Unmarshal(metaBuf, meta); err != nil {
 		span.RecordError(err)
-		return nil, nil, err
-	}
-	if !exists {
-		meta = nil
+		return nil, nil, fmt.Errorf("failed to proto unmarshal object meta: %w", err)
 	}
 
 	metrics.SpanOK(span)
-	return key, meta, nil
+	return metaKey, meta, nil
 }
 
 // Returns the associated metadata for an object. Returns nil if the object does not exist.
@@ -623,7 +605,7 @@ func (s *session) getListMeta(ctx context.Context, tx fdb.ReadTransaction, id st
 	ctx, span := s.tracer.Start(ctx, "getListMeta")
 	defer span.End()
 
-	key, objMeta, err := s.getObjectMeta(ctx, tx, id)
+	key, objMeta, err := s.getMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
 		return nil, nil, fmt.Errorf("failed to get object meta: %w", err)

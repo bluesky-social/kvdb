@@ -97,7 +97,7 @@ func (s *session) handlePush(ctx context.Context, args []resp.Value, left bool) 
 	}
 
 	_, err = s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		listMetaKey, objMeta, err := s.getObjectMeta(ctx, tx, key)
+		listMetaKey, objMeta, err := s.getMeta(ctx, tx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get list meta: %w", err)
 		}
