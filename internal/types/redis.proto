@@ -33,9 +33,8 @@ message ObjectMeta {
     BasicObjectMeta basic = 4;
     SetMeta set = 5;
     SortedSetMeta sorted_set = 6;
-    SortedSetItemMeta sorted_set_item = 7;
-    ListMeta list = 8;
-    ListItemMeta list_item = 9;
+    ListMeta list = 7;
+    ListItemMeta list_item = 8;
   }
 }
 
@@ -56,11 +55,6 @@ message SortedSetMeta {
   float max_score = 3;
 }
 
-message SortedSetItemMeta {
-  BasicObjectMeta object = 1;
-  float score = 2;
-}
-
 message ListMeta {
   uint64 num_items = 1;
   string item_head = 2;
@@ -73,4 +67,9 @@ message ListItemMeta {
   string previous = 3;
   uint32 num_chunks = 4;
   uint64 size_bytes = 5;
+}
+
+message UIDItem {
+  string member = 1;
+  optional float score = 2;
 }

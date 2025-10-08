@@ -52,10 +52,20 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 }
 
 func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, key string, members []string, scores []float32) (int64, []uint64, error) {
+	useScores := len(scores) > 0
+	if useScores && len(members) != len(scores) {
+		return 0, nil, fmt.Errorf("number of members does not match number of scores")
+	}
+
 	// look up or allocate a new UID for each set member
 	uids := make([]uint64, 0, len(members))
-	for _, member := range members {
-		uid, err := s.getOrAllocateUID(ctx, tx, member)
+	for ndx, member := range members {
+		item := &types.UIDItem{Member: member}
+		if useScores {
+			item.Score = &scores[ndx]
+		}
+
+		uid, err := s.getOrAllocateUID(ctx, tx, item)
 		if err != nil {
 			return 0, nil, fmt.Errorf("failed to get uid for member: %w", err)
 		}
@@ -573,34 +583,7 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 
 		for ndx, score := range scores {
 			// clear the previous priority value for this item, if any
-			metaKey, meta, err := s.getMeta(ctx, tx, members[ndx])
-			if err != nil {
-				return 0, fmt.Errorf("failed to get sorted set item meta: %w", err)
-			}
-			if meta == nil {
-				return 0, fmt.Errorf("failed to get sorted set item meta: not found")
-			}
-
-			switch typ := meta.Type.(type) {
-			case *types.ObjectMeta_Basic:
-				// alter the metadata for this object to ensure it's stored
-				// as a sorted set item rather than a basic object
-				meta.Type = &types.ObjectMeta_SortedSetItem{
-					SortedSetItem: &types.SortedSetItemMeta{
-						Object: typ.Basic,
-						Score:  score,
-					},
-				}
-			case *types.ObjectMeta_SortedSetItem:
-				typ.SortedSetItem.Score = score
-			default:
-				return 0, fmt.Errorf("unsupported object meta type: %T", meta.Type)
-			}
-
-			// store the updated meta ietam
-			if err := setProtoItem(tx, metaKey, meta); err != nil {
-				return 0, fmt.Errorf("failed to write sorted set item meta: %w", err)
-			}
+			// @TODO
 
 			// store the sortable score -> UID mapping
 			scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(score)})

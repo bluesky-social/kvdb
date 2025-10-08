@@ -698,11 +698,11 @@ func (s *session) allocateNewUID(ctx context.Context, tx fdb.Transaction) (uint6
 }
 
 // Returns the UID for the given member string, creating a new one if it does not exist
-func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, member string) (uint64, error) {
+func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, item *types.UIDItem) (uint64, error) {
 	ctx, span := s.tracer.Start(ctx, "getOrAllocateUID")
 	defer span.End()
 
-	memberToUIDKey, err := s.reverseUIDKey(member)
+	memberToUIDKey, err := s.reverseUIDKey(item.Member)
 	if err != nil {
 		span.RecordError(err)
 		return 0, fmt.Errorf("failed to get uid key: %w", err)
@@ -732,7 +732,9 @@ func (s *session) getOrAllocateUID(ctx context.Context, tx fdb.Transaction, memb
 
 		// store the bi-directional mapping
 		tx.Set(memberToUIDKey, []byte(uidStr))
-		tx.Set(uidToMemberKey, []byte(member))
+		if err := setProtoItem(tx, uidToMemberKey, item); err != nil {
+			return 0, fmt.Errorf("failed to set uid to member: %w", err)
+		}
 
 		val = []byte(uidStr)
 	}
