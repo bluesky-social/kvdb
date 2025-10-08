@@ -911,6 +911,7 @@ func TestOrderedSets(t *testing.T) {
 	score1 := "10"
 	val2 := testutil.RandString(24)
 	score2 := "20"
+	val3 := testutil.RandString(24)
 
 	// invalid arguments
 	res := sess.handleCommand(ctx, &resp.Command{
@@ -945,7 +946,7 @@ func TestOrderedSets(t *testing.T) {
 	})
 	requireRESPError(t, res)
 
-	// add both vals to the set
+	// add two vals to the set
 	res = sess.handleCommand(ctx, &resp.Command{
 		Name: "ZADD",
 		Args: []resp.Value{
@@ -1111,7 +1112,7 @@ func TestOrderedSets(t *testing.T) {
 	})
 	require.Equal(resp.FormatInt(0), res)
 
-	// delete should work
+	// add two items with the same score
 	res = sess.handleCommand(ctx, &resp.Command{
 		Name: "ZADD",
 		Args: []resp.Value{
@@ -1120,10 +1121,43 @@ func TestOrderedSets(t *testing.T) {
 			resp.BulkStringValue(val1),
 			resp.BulkStringValue(score2),
 			resp.BulkStringValue(val2),
+			resp.BulkStringValue(score2),
+			resp.BulkStringValue(val3),
+		},
+	})
+	require.Equal(resp.FormatInt(3), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(3), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZREMRANGEBYSCORE",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("19"),
+			resp.BulkStringValue("20"),
 		},
 	})
 	require.Equal(resp.FormatInt(2), res)
 
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	// delete should work
 	res = sess.handleCommand(ctx, &resp.Command{
 		Name: "DEL",
 		Args: []resp.Value{resp.SimpleStringValue(set1)},
