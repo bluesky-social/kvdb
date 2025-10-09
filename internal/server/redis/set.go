@@ -54,8 +54,7 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 }
 
 func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, kind objectKind, key string, members []string, scores []float32) (uint64, []uint64, error) {
-	useScores := len(scores) > 0
-	if useScores && len(members) != len(scores) {
+	if len(scores) > 0 && len(members) != len(scores) {
 		return 0, nil, fmt.Errorf("number of members does not match number of scores")
 	}
 
@@ -63,7 +62,7 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, kind
 	uids := make([]uint64, 0, len(members))
 	for ndx, member := range members {
 		item := &types.UIDItem{Member: member}
-		if useScores {
+		if len(scores) > 0 {
 			item.Score = &scores[ndx]
 		}
 
@@ -584,14 +583,6 @@ func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value
 	return resp.FormatArrayOfBulkStrings(members), nil
 }
 
-// @TODO (jrc): add the ability to have multiple items under a single score
-//
-// 127.0.0.1:6380> zadd z 10 10
-// (integer) 1
-// 127.0.0.1:6380> zadd z 10 101
-// (integer) 1
-// 127.0.0.1:6380> zcount z -inf +inf
-// (integer) 2
 func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, error) {
 	ctx, span := s.tracer.Start(ctx, "handleZAdd")
 	defer span.End()
@@ -646,28 +637,44 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 			return uint64(0), fmt.Errorf("failed to open score dir: %w", err)
 		}
 
-		for ndx, score := range scores {
-			scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(score)})
-
-			// clear the previous priority value for this item, if any
-			item := &types.UIDItem{}
-			exists, err := getProtoItem(tx, scoreKey.FDBKey(), item)
-			if err != nil {
-				return uint64(0), fmt.Errorf("failed to unmarshal uid item: %w", err)
-			}
-			if exists && item.Score != nil {
-				oldScoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(*item.Score)})
-				tx.Clear(oldScoreKey)
-			}
-
-			item = &types.UIDItem{
-				Member: members[ndx],
-				Uid:    uids[ndx],
+		// clear the previous priority values for the items with this score, if any
+		for scoreNdx, score := range scores {
+			newItem := &types.UIDItem{
+				Member: members[scoreNdx],
+				Uid:    uids[scoreNdx],
 				Score:  &score,
 			}
 
+			scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(score)})
+
+			items := &types.UIDItems{}
+			exists, err := getProtoItem(tx, scoreKey.FDBKey(), items)
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to unmarshal uid item: %w", err)
+			}
+
+			if !exists {
+				// create new
+				items.Items = append(items.Items, newItem)
+			} else {
+				found := false
+				for _, existingItem := range items.Items {
+					if existingItem.Uid == newItem.Uid {
+						// update existing
+						existingItem.Score = &score
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					// create new
+					items.Items = append(items.Items, newItem)
+				}
+			}
+
 			// store the sortable score -> UID mapping
-			if err := setProtoItem(tx, scoreKey, item); err != nil {
+			if err := setProtoItem(tx, scoreKey, items); err != nil {
 				return uint64(0), err
 			}
 		}
@@ -780,7 +787,13 @@ func (s *session) handleZCount(ctx context.Context, args []resp.Value) (string, 
 				break // out of range and we're done
 			}
 
-			count += 1
+			// count the number of items with this score
+			items := &types.UIDItems{}
+			if err := proto.Unmarshal(kv.Value, items); err != nil {
+				return uint64(0), fmt.Errorf("failed to unmarshal uid items: %w", err)
+			}
+
+			count += uint64(len(items.Items))
 		}
 
 		return count, nil
@@ -874,12 +887,14 @@ func (s *session) handleZRemRangeByScore(ctx context.Context, args []resp.Value)
 				break // out of range and we're done
 			}
 
-			// get the UID for the item, which will be deleted in batch later
-			item := &types.UIDItem{}
-			if err := proto.Unmarshal(kv.Value, item); err != nil {
+			// get the UID for the items, which will be deleted in batch later
+			items := &types.UIDItems{}
+			if err := proto.Unmarshal(kv.Value, items); err != nil {
 				return uint64(0), fmt.Errorf("failed to unmarshal uid item: %w", err)
 			}
-			uids = append(uids, item.Uid)
+			for _, item := range items.Items {
+				uids = append(uids, item.Uid)
+			}
 
 			// clear the entry from the sorted score directory
 			tx.Clear(kv.Key)

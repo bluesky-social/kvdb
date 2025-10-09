@@ -362,8 +362,10 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 				return false, fmt.Errorf("failed to get sorted set score directory: %w", err)
 			}
 
-			begin, end := scoreDir.FDBRangeKeys()
-			tx.ClearRange(fdb.KeyRange{Begin: begin, End: end})
+			_, err = scoreDir.Remove(tx, []string{})
+			if err != nil {
+				return false, fmt.Errorf("failed to remove score directory: %w", err)
+			}
 		}
 
 		return true, nil

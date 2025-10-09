@@ -74,3 +74,7 @@ message UIDItem {
   uint64 uid = 2;
   optional float score = 3;
 }
+
+message UIDItems {
+  repeated UIDItem items = 1;
+}

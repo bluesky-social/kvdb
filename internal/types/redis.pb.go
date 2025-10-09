@@ -724,6 +724,50 @@ func (x *UIDItem) GetScore() float32 {
 	return 0
 }
 
+type UIDItems struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*UIDItem             `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UIDItems) Reset() {
+	*x = UIDItems{}
+	mi := &file_redis_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UIDItems) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UIDItems) ProtoMessage() {}
+
+func (x *UIDItems) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UIDItems.ProtoReflect.Descriptor instead.
+func (*UIDItems) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *UIDItems) GetItems() []*UIDItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
 var File_redis_proto protoreflect.FileDescriptor
 
 const file_redis_proto_rawDesc = "" +
@@ -786,7 +830,9 @@ const file_redis_proto_rawDesc = "" +
 	"\x06member\x18\x01 \x01(\tR\x06member\x12\x10\n" +
 	"\x03uid\x18\x02 \x01(\x04R\x03uid\x12\x19\n" +
 	"\x05score\x18\x03 \x01(\x02H\x00R\x05score\x88\x01\x01B\b\n" +
-	"\x06_score*\x97\x01\n" +
+	"\x06_score\"0\n" +
+	"\bUIDItems\x12$\n" +
+	"\x05items\x18\x01 \x03(\v2\x0e.types.UIDItemR\x05items*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
 	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +
@@ -806,7 +852,7 @@ func file_redis_proto_rawDescGZIP() []byte {
 }
 
 var file_redis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_redis_proto_goTypes = []any{
 	(UserAccessLevel)(0),          // 0: types.UserAccessLevel
 	(*User)(nil),                  // 1: types.User
@@ -818,26 +864,28 @@ var file_redis_proto_goTypes = []any{
 	(*ListMeta)(nil),              // 7: types.ListMeta
 	(*ListItemMeta)(nil),          // 8: types.ListItemMeta
 	(*UIDItem)(nil),               // 9: types.UIDItem
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*UIDItems)(nil),              // 10: types.UIDItems
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_redis_proto_depIdxs = []int32{
-	10, // 0: types.User.created:type_name -> google.protobuf.Timestamp
-	10, // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
+	11, // 0: types.User.created:type_name -> google.protobuf.Timestamp
+	11, // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
 	2,  // 2: types.User.rules:type_name -> types.UserACLRule
 	0,  // 3: types.UserACLRule.level:type_name -> types.UserAccessLevel
-	10, // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
-	10, // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
-	10, // 6: types.ObjectMeta.expires:type_name -> google.protobuf.Timestamp
+	11, // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
+	11, // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
+	11, // 6: types.ObjectMeta.expires:type_name -> google.protobuf.Timestamp
 	4,  // 7: types.ObjectMeta.basic:type_name -> types.BasicObjectMeta
 	5,  // 8: types.ObjectMeta.set:type_name -> types.SetMeta
 	6,  // 9: types.ObjectMeta.sorted_set:type_name -> types.SortedSetMeta
 	7,  // 10: types.ObjectMeta.list:type_name -> types.ListMeta
 	8,  // 11: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	9,  // 12: types.UIDItems.items:type_name -> types.UIDItem
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_redis_proto_init() }
@@ -859,7 +907,7 @@ func file_redis_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_redis_proto_rawDesc), len(file_redis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
