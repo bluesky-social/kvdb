@@ -68,3 +68,4 @@ FoundationDB provides strictly serializable transactions atop an ordered key-val
 |`redis_v0/<user_id>/obj/<obj_id>`|Storage of data objects|
 |`redis_v0/<user_id>/list/<list_id>`|Metadata protobuf for information on each list|
 |`redis_v0/<user_id>/list/<list_id>/<item_id>`|Metadata protobuf for information on each item in a list|
+|`redis_v0/<user_id>/zset/<set_id>`|Stores an ordered list of item scores for ordered sets|
