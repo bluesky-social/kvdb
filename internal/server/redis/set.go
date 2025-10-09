@@ -2,13 +2,20 @@ package redis
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
+	"strconv"
 
 	roaring "github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/bluesky-social/go-util/pkg/concurrent"
 	"github.com/bluesky-social/kvdb/internal/metrics"
+	"github.com/bluesky-social/kvdb/internal/types"
 	"github.com/bluesky-social/kvdb/pkg/serde/resp"
+	"google.golang.org/protobuf/proto"
 )
 
 func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, error) {
@@ -30,69 +37,93 @@ func (s *session) handleSetAdd(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		// allocate a new UID for each member
-		r := concurrent.New[string, uint64]()
-		uids, err := r.Do(ctx, members, func(member string) (n uint64, err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					err = recoverErr("assigning new uids", r)
-				}
-			}()
-
-			return s.getOrAllocateUID(ctx, tx, member)
-		})
-		if err != nil {
-			return nil, recordErr(span, fmt.Errorf("failed to get uids for members: %w", err))
-		}
-
-		// get the bitmap if it exists
-		_, blob, err := s.getObject(ctx, tx, objectKindSet, key)
-		if err != nil {
-			return int64(0), fmt.Errorf("failed to get existing set: %w", err)
-		}
-
-		// if the key doesn't exist, create a new bitmap
-		bitmap := roaring.New()
-		if len(blob) > 0 {
-			if err := bitmap.UnmarshalBinary(blob); err != nil {
-				return int64(0), fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
-			}
-		}
-
-		// diff against the existing map to determine how many members are new
-		added := int64(0)
-		for _, uid := range uids {
-			if !bitmap.Contains(uid) {
-				added += 1
-			}
-		}
-
-		// add the new UIDs to the bitmap
-		bitmap.AddMany(uids)
-
-		// serialize and store the updated bitmap
-		data, err := bitmap.MarshalBinary()
-		if err != nil {
-			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
-		}
-
-		if err = s.writeObject(ctx, tx, key, objectKindSet, data); err != nil {
-			return int64(0), fmt.Errorf("failed to write set: %w", err)
-		}
-
-		return added, nil
+		numAdded, _, err := s.createOrAddToSet(ctx, tx, objectKindSet, key, members, nil)
+		return numAdded, err
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
 	}
 
-	added, err := cast[int64](addedAny)
+	added, err := cast[uint64](addedAny)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
 	metrics.SpanOK(span)
-	return resp.FormatInt(added), nil
+	return resp.FormatUint(added), nil
+}
+
+func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, kind objectKind, key string, members []string, scores []float32) (uint64, []uint64, error) {
+	if len(scores) > 0 && len(members) != len(scores) {
+		return 0, nil, fmt.Errorf("number of members does not match number of scores")
+	}
+
+	// get the set if it exists
+	meta, blob, err := s.getObject(ctx, tx, kind, key)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to get existing set: %w", err)
+	}
+
+	if meta != nil {
+		// ensure that you can't sadd to a sorted set and vice versa
+		kindOK := false
+		switch meta.Type.(type) {
+		case *types.ObjectMeta_Set:
+			kindOK = kind == objectKindSet
+		case *types.ObjectMeta_SortedSet:
+			kindOK = kind == objectKindSortedSet
+		}
+		if !kindOK {
+			return 0, nil, errWrongKind
+		}
+	}
+
+	// look up or allocate a new UID for each set member
+	uids := make([]uint64, 0, len(members))
+	for ndx, memberStr := range members {
+		member := &types.SetMember{Member: memberStr}
+		if len(scores) > 0 {
+			member.Score = &scores[ndx]
+		}
+
+		uid, err := s.getOrAllocateUID(ctx, tx, member)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to get uid for member: %w", err)
+		}
+		uids = append(uids, uid)
+		member.Uid = uid
+	}
+
+	// if the key doesn't exist, create a new bitmap
+	bitmap := roaring.New()
+	if len(blob) > 0 {
+		if err := bitmap.UnmarshalBinary(blob); err != nil {
+			return 0, nil, fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+		}
+	}
+
+	// diff against the existing map to determine how many members are new
+	added := uint64(0)
+	for _, uid := range uids {
+		if !bitmap.Contains(uid) {
+			added += 1
+		}
+	}
+
+	// add the new UIDs to the bitmap
+	bitmap.AddMany(uids)
+
+	// serialize and store the updated bitmap
+	data, err := bitmap.MarshalBinary()
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to marshal bitmap: %w", err)
+	}
+
+	if err = s.writeObject(ctx, tx, key, kind, data); err != nil {
+		return 0, nil, fmt.Errorf("failed to write set: %w", err)
+	}
+
+	return added, uids, nil
 }
 
 func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (string, error) {
@@ -129,62 +160,90 @@ func (s *session) handleSetRemove(ctx context.Context, args []resp.Value) (strin
 			return nil, recordErr(span, fmt.Errorf("failed to get uids for members: %w", err))
 		}
 
-		// get the bitmap if it exists
-		objMeta, blob, err := s.getObject(ctx, tx, objectKindSet, key)
-		if err != nil {
-			return int64(0), fmt.Errorf("failed to get existing set: %w", err)
-		}
-
-		// if the bitmap doesn't exist, there's nothing to remove
-		if len(blob) == 0 {
-			return int64(0), nil
-		}
-
-		bitmap := roaring.New()
-		if err := bitmap.UnmarshalBinary(blob); err != nil {
-			return int64(0), fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
-		}
-
-		// remove from the bitmap and count
-		removed := int64(0)
-		for _, uid := range uids {
-			if bitmap.Contains(uid) {
-				bitmap.Remove(uid)
-				removed++
-			}
-		}
-
-		// if the set is now empty, delete the object
-		if bitmap.IsEmpty() {
-			if err := s.deleteObject(ctx, tx, key, objMeta); err != nil {
-				return int64(0), fmt.Errorf("failed to delete object: %w", err)
-			}
-			return removed, nil
-		}
-
-		// serialize and store the updated bitmap
-		data, err := bitmap.MarshalBinary()
-		if err != nil {
-			return int64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
-		}
-
-		if err = s.writeObject(ctx, tx, key, objectKindSet, data); err != nil {
-			return int64(0), fmt.Errorf("failed to write set: %w", err)
-		}
-
-		return removed, nil
+		return s.removeFromSet(ctx, tx, objectKindSet, key, uids)
 	})
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("failed to remove members from set: %w", err))
 	}
 
-	removed, err := cast[int64](removedAny)
+	removed, err := cast[uint64](removedAny)
 	if err != nil {
 		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
 	}
 
 	metrics.SpanOK(span)
-	return resp.FormatInt(removed), nil
+	return resp.FormatUint(removed), nil
+}
+
+func (s *session) removeFromSet(ctx context.Context, tx fdb.Transaction, kind objectKind, key string, uids []uint64) (uint64, error) {
+	ctx, span := s.tracer.Start(ctx, "removeFromSet")
+	defer span.End()
+
+	// get the bitmap if it exists
+	objMeta, blob, err := s.getObject(ctx, tx, kind, key)
+	if err != nil {
+		return uint64(0), fmt.Errorf("failed to get existing set: %w", err)
+	}
+
+	// if the bitmap doesn't exist, there's nothing to remove
+	if len(blob) == 0 {
+		return uint64(0), nil
+	}
+
+	bitmap := roaring.New()
+	if err := bitmap.UnmarshalBinary(blob); err != nil {
+		return uint64(0), fmt.Errorf("failed to unmarshal existing bitmap: %w", err)
+	}
+
+	var scoreDir directory.DirectorySubspace
+	if kind == objectKindSortedSet {
+		scoreDir, err = s.sortedSetScoreDir(key)
+		if err != nil {
+			return 0, fmt.Errorf("failed to open score dir: %w", err)
+		}
+	}
+
+	// remove from the bitmap and count
+	removed := uint64(0)
+	for _, uid := range uids {
+		if bitmap.Contains(uid) {
+			bitmap.Remove(uid)
+			removed++
+		}
+
+		// find and delete the score in the sorted directory
+		if kind == objectKindSortedSet {
+			member, err := s.memberFromUID(ctx, tx, uid)
+			if err != nil {
+				return 0, fmt.Errorf("failed to get set member info from uid: %w", err)
+			}
+
+			if member.Score != nil {
+				scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(*member.Score)})
+				tx.Clear(scoreKey)
+			}
+		}
+	}
+
+	// if the set is now empty, delete the object
+	if bitmap.IsEmpty() {
+		if err := s.deleteObject(ctx, tx, key, objMeta); err != nil {
+			return uint64(0), fmt.Errorf("failed to delete object: %w", err)
+		}
+		return removed, nil
+	}
+
+	// serialize and store the updated bitmap
+	data, err := bitmap.MarshalBinary()
+	if err != nil {
+		return uint64(0), fmt.Errorf("failed to marshal bitmap: %w", err)
+	}
+
+	if err = s.writeObject(ctx, tx, key, kind, data); err != nil {
+		return uint64(0), fmt.Errorf("failed to write set: %w", err)
+	}
+
+	return removed, nil
 }
 
 func (s *session) handleSetIsMember(ctx context.Context, args []resp.Value) (string, error) {
@@ -328,14 +387,20 @@ func (s *session) handleSetMembers(ctx context.Context, args []resp.Value) (stri
 		uids := bitmap.ToArray()
 
 		r := concurrent.New[uint64, string]()
-		members, err := r.Do(ctx, uids, func(uid uint64) (string, error) {
+		members, err := r.Do(ctx, uids, func(uid uint64) (member string, err error) {
 			defer func() {
 				if r := recover(); r != nil {
 					err = recoverErr("retreiving members from uids", r)
 				}
 			}()
 
-			return s.memberFromUID(ctx, tx, uid)
+			m, err := s.memberFromUID(ctx, tx, uid)
+			if err != nil {
+				return "", fmt.Errorf("failed to get member from uid: %w", err)
+			}
+
+			member = m.Member
+			return
 		})
 		if err != nil {
 			return []string{}, fmt.Errorf("failed to get member from uid: %w", err)
@@ -434,7 +499,7 @@ func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value
 	for ndx, arg := range args {
 		setKey, err := extractStringArg(arg)
 		if err != nil {
-			return "", recordErr(span, fmt.Errorf("failed to parse set key argument at index %d: %w", ndx, err))
+			return "", recordErr(span, fmt.Errorf("failed to parse argument %q at index %d: %w", arg, ndx, err))
 		}
 		setKeys = append(setKeys, setKey)
 	}
@@ -491,7 +556,13 @@ func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value
 				}
 			}()
 
-			return s.memberFromUID(ctx, tx, uid)
+			m, err := s.memberFromUID(ctx, tx, uid)
+			if err != nil {
+				return "", fmt.Errorf("failed to get member from uid: %w", err)
+			}
+
+			member = m.Member
+			return
 		})
 		if err != nil {
 			return nil, recordErr(span, fmt.Errorf("failed to get members for UIDs: %w", err))
@@ -510,4 +581,337 @@ func (s *session) handleMultiSetOperation(ctx context.Context, args []resp.Value
 
 	metrics.SpanOK(span)
 	return resp.FormatArrayOfBulkStrings(members), nil
+}
+
+func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleZAdd")
+	defer span.End()
+
+	if err := validateNumArgs(args, 3); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	if len(args)%2 != 1 {
+		return "", recordErr(span, fmt.Errorf("invalid number of arguments"))
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	var (
+		scores  []float32
+		members []string
+	)
+	for ndx := 1; ndx < len(args); ndx += 2 {
+		scoreArg := args[ndx]
+		scoreStr, err := extractStringArg(scoreArg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse score argument %q at index %d: %w", scoreArg, ndx, err))
+		}
+
+		score, err := strconv.ParseFloat(scoreStr, 32)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse score argument %q as float: %w", scoreStr, err))
+		}
+
+		memberArg := args[ndx+1]
+		member, err := extractStringArg(memberArg)
+		if err != nil {
+			return "", recordErr(span, fmt.Errorf("failed to parse member argument %q at index %d: %w", memberArg, ndx, err))
+		}
+
+		scores = append(scores, float32(score))
+		members = append(members, member)
+	}
+
+	addedAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		numAdded, uids, err := s.createOrAddToSet(ctx, tx, objectKindSortedSet, key, members, scores)
+		if err != nil {
+			return uint64(0), err
+		}
+
+		scoreDir, err := s.sortedSetScoreDir(key)
+		if err != nil {
+			return uint64(0), fmt.Errorf("failed to open score dir: %w", err)
+		}
+
+		// clear the previous priority values for the members with this score, if any
+		for scoreNdx, score := range scores {
+			newMember := &types.SetMember{
+				Member: members[scoreNdx],
+				Uid:    uids[scoreNdx],
+				Score:  &score,
+			}
+
+			scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(score)})
+
+			setMembers := &types.SetMembers{}
+			exists, err := getProtoItem(tx, scoreKey.FDBKey(), setMembers)
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to unmarshal uid item: %w", err)
+			}
+
+			if !exists {
+				// create new
+				setMembers.Members = append(setMembers.Members, newMember)
+			} else {
+				found := false
+				for _, existing := range setMembers.Members {
+					if existing.Uid == newMember.Uid {
+						// update existing
+						existing.Score = &score
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					// create new
+					setMembers.Members = append(setMembers.Members, newMember)
+				}
+			}
+
+			// store the sortable score -> UID mapping
+			if err := setProtoItem(tx, scoreKey, setMembers); err != nil {
+				return uint64(0), err
+			}
+		}
+
+		return numAdded, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to add members to set: %w", err))
+	}
+
+	added, err := cast[uint64](addedAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	metrics.SpanOK(span)
+	return resp.FormatUint(added), nil
+}
+
+// Encodes a floating point sorted set score lexicographically so we can store them in sorted order
+func encodeSortedSetScore(score float32) string {
+	bits := math.Float32bits(score)
+	if score >= 0 {
+		// flip the sign bit so positive numbers are sorted after negative ones
+		bits ^= 0x80000000
+	} else {
+		// flip all bits so more negative numbers are sorted before less negative numbers
+		bits ^= 0xFFFFFFFF
+	}
+
+	// big endian ensures correct sort order
+	buf := make([]byte, 4)
+	binary.BigEndian.PutUint32(buf, bits)
+	return string(buf)
+}
+
+func (s *session) handleZCount(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleZCount") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 3); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	startStr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse start argument: %w", err))
+	}
+	startRaw, err := strconv.ParseFloat(startStr, 32)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid start argument: %w", err))
+	}
+	start := encodeSortedSetScore(float32(startRaw))
+
+	endStr, err := extractStringArg(args[2])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse end argument: %w", err))
+	}
+	endRaw, err := strconv.ParseFloat(endStr, 32)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid end argument: %w", err))
+	}
+	end := encodeSortedSetScore(float32(endRaw))
+
+	countAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
+		dir, err := s.sortedSetScoreDir(key)
+		if err != nil {
+			return uint64(0), fmt.Errorf("failed to get sorted set score dir: %w", err)
+		}
+
+		beginRange, endRange := dir.FDBRangeKeys()
+		rangeResult := tx.GetRange(
+			fdb.KeyRange{
+				Begin: beginRange,
+				End:   endRange,
+			},
+			fdb.RangeOptions{},
+		)
+
+		count := uint64(0)
+		it := rangeResult.Iterator()
+		for it.Advance() {
+			kv, err := it.Get()
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to iterate over key range: %w", err)
+			}
+
+			// convert the key tuple to a string
+			tup, err := dir.Unpack(kv.Key)
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to unpack tuple: %w", err)
+			}
+			if len(tup) != 1 {
+				return uint64(0), fmt.Errorf("invalid tuple length")
+			}
+			key, err := cast[string](tup[0])
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to cast tuple key: %w", err)
+			}
+
+			if key < start {
+				continue // out of range but not done yet
+			}
+			if key > end {
+				break // out of range and we're done
+			}
+
+			// count the number of items with this score
+			items := &types.SetMembers{}
+			if err := proto.Unmarshal(kv.Value, items); err != nil {
+				return uint64(0), fmt.Errorf("failed to unmarshal uid items: %w", err)
+			}
+
+			count += uint64(len(items.Members))
+		}
+
+		return count, nil
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to get sorted set count: %w", err))
+	}
+
+	count, err := cast[uint64](countAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	metrics.SpanOK(span)
+	return resp.FormatUint(count), nil
+}
+
+func (s *session) handleZRemRangeByScore(ctx context.Context, args []resp.Value) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "handleZRemRangeByScore") // nolint
+	defer span.End()
+
+	if err := validateNumArgs(args, 3); err != nil {
+		return "", recordErr(span, err)
+	}
+
+	key, err := extractStringArg(args[0])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse set key argument: %w", err))
+	}
+
+	startStr, err := extractStringArg(args[1])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse start argument: %w", err))
+	}
+	startRaw, err := strconv.ParseFloat(startStr, 32)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid start argument: %w", err))
+	}
+	start := encodeSortedSetScore(float32(startRaw))
+
+	endStr, err := extractStringArg(args[2])
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to parse end argument: %w", err))
+	}
+	endRaw, err := strconv.ParseFloat(endStr, 32)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid end argument: %w", err))
+	}
+	end := encodeSortedSetScore(float32(endRaw))
+
+	countAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
+		dir, err := s.sortedSetScoreDir(key)
+		if err != nil {
+			return uint64(0), fmt.Errorf("failed to get sorted set score dir: %w", err)
+		}
+
+		beginRange, endRange := dir.FDBRangeKeys()
+		rangeResult := tx.GetRange(
+			fdb.KeyRange{
+				Begin: beginRange,
+				End:   endRange,
+			},
+			fdb.RangeOptions{},
+		)
+
+		uids := []uint64{}
+		it := rangeResult.Iterator()
+		for it.Advance() {
+			kv, err := it.Get()
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to iterate over key range: %w", err)
+			}
+
+			// convert the key tuple to a string
+			tup, err := dir.Unpack(kv.Key)
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to unpack tuple: %w", err)
+			}
+			if len(tup) != 1 {
+				return uint64(0), fmt.Errorf("invalid tuple length")
+			}
+			key, err := cast[string](tup[0])
+			if err != nil {
+				return uint64(0), fmt.Errorf("failed to cast tuple key: %w", err)
+			}
+
+			if key < start {
+				continue // out of range but not done yet
+			}
+			if key > end {
+				break // out of range and we're done
+			}
+
+			// get the UID for the items, which will be deleted in batch later
+			items := &types.SetMembers{}
+			if err := proto.Unmarshal(kv.Value, items); err != nil {
+				return uint64(0), fmt.Errorf("failed to unmarshal uid item: %w", err)
+			}
+			for _, item := range items.Members {
+				uids = append(uids, item.Uid)
+			}
+
+			// clear the entry from the sorted score directory
+			tx.Clear(kv.Key)
+		}
+
+		// remove the all items from the set
+		return s.removeFromSet(ctx, tx, objectKindSortedSet, key, uids)
+	})
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("failed to remove from sorted set: %w", err))
+	}
+
+	count, err := cast[uint64](countAny)
+	if err != nil {
+		return "", recordErr(span, fmt.Errorf("invalid result type: %w", err))
+	}
+
+	metrics.SpanOK(span)
+	return resp.FormatUint(count), nil
 }

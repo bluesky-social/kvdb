@@ -573,23 +573,21 @@ func TestSets(t *testing.T) {
 	val1 := "val1"
 	val2 := "val2"
 
-	{
-		// invalid arguments
-		res := sess.handleCommand(ctx, &resp.Command{
-			Name: "SADD",
-			Args: []resp.Value{resp.SimpleStringValue(set1)},
-		})
-		requireRESPError(t, res)
+	// invalid arguments
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "SADD",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireRESPError(t, res)
 
-		res = sess.handleCommand(ctx, &resp.Command{
-			Name: "SADD",
-			Args: []resp.Value{},
-		})
-		requireRESPError(t, res)
-	}
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SADD",
+		Args: []resp.Value{},
+	})
+	requireRESPError(t, res)
 
 	// add val1 to the set
-	res := sess.handleCommand(ctx, &resp.Command{
+	res = sess.handleCommand(ctx, &resp.Command{
 		Name: "SADD",
 		Args: []resp.Value{
 			resp.SimpleStringValue(set1),
@@ -602,6 +600,17 @@ func TestSets(t *testing.T) {
 	res = sess.handleCommand(ctx, &resp.Command{
 		Name: "SISMEMBER",
 		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireRESPError(t, res)
+
+	// ensure that we can't ZADD to a non-ordered set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue("100"),
+			resp.BulkStringValue(val1),
+		},
 	})
 	requireRESPError(t, res)
 
@@ -890,6 +899,296 @@ func TestSets(t *testing.T) {
 		},
 	})
 	require.Equal(resp.FormatInt(1), res)
+}
+
+func TestEncodeSortedSetScore(t *testing.T) {
+	// spot check a couple values
+	require.Equal(t, []byte{0x40, 0x3f, 0xff, 0xff}, []byte(encodeSortedSetScore(-1.5)))
+	require.Equal(t, []byte{0xc0, 0x00, 0x00, 0x00}, []byte(encodeSortedSetScore(2.0)))
+
+	// perform many operations and ensure that sort order holds
+	f := float32(-100)
+	last := encodeSortedSetScore(f)
+	for range 100 {
+		f += 1.5
+		current := encodeSortedSetScore(f)
+		require.True(t, last < current)
+		last = current
+	}
+}
+
+func TestOrderedSets(t *testing.T) {
+	require := require.New(t)
+	ctx := t.Context()
+	sess := testSessionWithAuth(t)
+
+	set1 := testutil.RandString(24)
+	val1 := testutil.RandString(24)
+	score1 := "10"
+	val2 := testutil.RandString(24)
+	score2 := "20"
+	val3 := testutil.RandString(24)
+
+	// invalid arguments
+	res := sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{},
+	})
+	requireRESPError(t, res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	requireRESPError(t, res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(score1),
+		},
+	})
+	requireRESPError(t, res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.SimpleStringValue(score1),
+			resp.SimpleStringValue(val1),
+			resp.SimpleStringValue(score2),
+		},
+	})
+	requireRESPError(t, res)
+
+	// add two vals to the set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue(score1),
+			resp.BulkStringValue(val1),
+			resp.BulkStringValue(score2),
+			resp.BulkStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	// should have two items since we're scanning the range inclusively
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue(score1),
+			resp.BulkStringValue(score2),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	// ensure that we can't SADD to an ordered set
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "SADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue(val1),
+		},
+	})
+	requireRESPError(t, res)
+
+	// should have two items and parse infinity values correctly
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	// should have one item
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("5"),
+			resp.BulkStringValue("10"),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	// should have zero items since they're out of range
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("5"),
+			resp.BulkStringValue("9"),
+		},
+	})
+	require.Equal(resp.FormatInt(0), res)
+
+	// start range less than end range should have no results
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("5"),
+			resp.BulkStringValue("0"),
+		},
+	})
+	require.Equal(resp.FormatInt(0), res)
+
+	// adding again should be a noop, then check the count
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue(score1),
+			resp.BulkStringValue(val1),
+			resp.BulkStringValue(score2),
+			resp.BulkStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatInt(0), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	// remove one member, then check the count
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZREMRANGEBYSCORE",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("0"),
+			resp.BulkStringValue("19"),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	// adding again should add one, then check the count
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue(score1),
+			resp.BulkStringValue(val1),
+			resp.BulkStringValue(score2),
+			resp.BulkStringValue(val2),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	// remove them all
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZREMRANGEBYSCORE",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(0), res)
+
+	// add two items with the same score
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZADD",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue(score1),
+			resp.BulkStringValue(val1),
+			resp.BulkStringValue(score2),
+			resp.BulkStringValue(val2),
+			resp.BulkStringValue(score2),
+			resp.BulkStringValue(val3),
+		},
+	})
+	require.Equal(resp.FormatInt(3), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(3), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZREMRANGEBYSCORE",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("19"),
+			resp.BulkStringValue("20"),
+		},
+	})
+	require.Equal(resp.FormatInt(2), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	// delete should work
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "DEL",
+		Args: []resp.Value{resp.SimpleStringValue(set1)},
+	})
+	require.Equal(resp.FormatInt(1), res)
+
+	res = sess.handleCommand(ctx, &resp.Command{
+		Name: "ZCOUNT",
+		Args: []resp.Value{
+			resp.SimpleStringValue(set1),
+			resp.BulkStringValue("-inf"),
+			resp.BulkStringValue("+inf"),
+		},
+	})
+	require.Equal(resp.FormatInt(0), res)
 }
 
 func TestLists(t *testing.T) {

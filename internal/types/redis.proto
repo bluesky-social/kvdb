@@ -32,8 +32,9 @@ message ObjectMeta {
   oneof type {
     BasicObjectMeta basic = 4;
     SetMeta set = 5;
-    ListMeta list = 6;
-    ListItemMeta list_item = 7;
+    SortedSetMeta sorted_set = 6;
+    ListMeta list = 7;
+    ListItemMeta list_item = 8;
   }
 }
 
@@ -43,6 +44,22 @@ message BasicObjectMeta {
 }
 
 message SetMeta {
+  uint64 num_items = 1;
+  uint32 num_chunks = 2;
+  uint64 size_bytes = 3;
+}
+
+message SetMember {
+  uint64 uid = 1;
+  string member = 2;
+  optional float score = 3;
+}
+
+message SetMembers {
+  repeated SetMember members = 1;
+}
+
+message SortedSetMeta {
   uint64 num_items = 1;
   uint32 num_chunks = 2;
   uint64 size_bytes = 3;

@@ -23,6 +23,7 @@ type objectKind int64
 const (
 	objectKindBasic objectKind = 1 << iota
 	objectKindSet
+	objectKindSortedSet
 	objectKindList
 	objectKindListItem
 )
@@ -44,6 +45,9 @@ func getNumChunks(meta *types.ObjectMeta, kind gt.Option[objectKind]) (uint32, e
 	case *types.ObjectMeta_Set:
 		objKind = objectKindSet
 		numChunks = typ.Set.NumChunks
+	case *types.ObjectMeta_SortedSet:
+		objKind = objectKindSortedSet
+		numChunks = typ.SortedSet.NumChunks
 	case *types.ObjectMeta_ListItem:
 		objKind = objectKindListItem
 		numChunks = typ.ListItem.NumChunks
@@ -64,7 +68,7 @@ func (s *session) getObject(ctx context.Context, tx fdb.ReadTransaction, kind ob
 	ctx, span := s.tracer.Start(ctx, "getObject")
 	defer span.End()
 
-	_, meta, err := s.getObjectMeta(ctx, tx, id)
+	_, meta, err := s.getMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
 		return nil, nil, err
@@ -116,7 +120,7 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 	now := timestamppb.Now()
 
 	// check if the object already exists and should be overwritten
-	metaKey, meta, err := s.getObjectMeta(ctx, tx, id)
+	metaKey, meta, err := s.getMeta(ctx, tx, id)
 	if err != nil {
 		span.RecordError(err)
 		return err
@@ -137,6 +141,8 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 			meta.Type = &types.ObjectMeta_Basic{Basic: &types.BasicObjectMeta{}}
 		case objectKindSet:
 			meta.Type = &types.ObjectMeta_Set{Set: &types.SetMeta{}}
+		case objectKindSortedSet:
+			meta.Type = &types.ObjectMeta_SortedSet{SortedSet: &types.SortedSetMeta{}}
 		case objectKindListItem:
 			meta.Type = &types.ObjectMeta_ListItem{ListItem: &types.ListItemMeta{}}
 		}
@@ -157,6 +163,8 @@ func (s *session) writeObject(ctx context.Context, tx fdb.Transaction, id string
 		typ.Basic.NumChunks = numChunks
 	case *types.ObjectMeta_Set:
 		typ.Set.NumChunks = numChunks
+	case *types.ObjectMeta_SortedSet:
+		typ.SortedSet.NumChunks = numChunks
 	case *types.ObjectMeta_ListItem:
 		typ.ListItem.NumChunks = numChunks
 	}
@@ -217,10 +225,7 @@ func (s *session) deleteObject(ctx context.Context, tx fdb.Transaction, id strin
 		span.RecordError(err)
 		return fmt.Errorf("failed to get object start key: %w", err)
 	}
-	tx.ClearRange(fdb.KeyRange{
-		Begin: begin,
-		End:   end,
-	})
+	tx.ClearRange(fdb.KeyRange{Begin: begin, End: end})
 
 	metrics.SpanOK(span)
 	return nil
@@ -275,7 +280,7 @@ func (s *session) handleExists(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	existsAny, err := s.fdb.ReadTransact(func(tx fdb.ReadTransaction) (any, error) {
-		_, meta, err := s.getObjectMeta(ctx, tx, key)
+		_, meta, err := s.getMeta(ctx, tx, key)
 		if err != nil {
 			return nil, err
 		}
@@ -337,7 +342,7 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 	}
 
 	existsAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		_, meta, err := s.getObjectMeta(ctx, tx, key)
+		_, meta, err := s.getMeta(ctx, tx, key)
 		if err != nil {
 			return false, err
 		}
@@ -348,6 +353,19 @@ func (s *session) handleDelete(ctx context.Context, args []resp.Value) (string, 
 		err = s.deleteObject(ctx, tx, key, meta)
 		if err != nil {
 			return false, err
+		}
+
+		// if we're deleting a sorted set, also clear its score directory
+		if _, ok := meta.Type.(*types.ObjectMeta_SortedSet); ok {
+			scoreDir, err := s.sortedSetScoreDir(key)
+			if err != nil {
+				return false, fmt.Errorf("failed to get sorted set score directory: %w", err)
+			}
+
+			_, err = scoreDir.Remove(tx, []string{})
+			if err != nil {
+				return false, fmt.Errorf("failed to remove score directory: %w", err)
+			}
 		}
 
 		return true, nil
@@ -578,7 +596,7 @@ func (s *session) handleExpire(ctx context.Context, args []resp.Value) (string, 
 	delta := time.Duration(secs) * time.Second
 
 	resAny, err := s.fdb.Transact(func(tx fdb.Transaction) (any, error) {
-		metaKey, meta, err := s.getObjectMeta(ctx, tx, key)
+		metaKey, meta, err := s.getMeta(ctx, tx, key)
 		if err != nil {
 			return 0, fmt.Errorf("failed to get object meta: %w", err)
 		}

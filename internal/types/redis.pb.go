@@ -211,6 +211,7 @@ type ObjectMeta struct {
 	//
 	//	*ObjectMeta_Basic
 	//	*ObjectMeta_Set
+	//	*ObjectMeta_SortedSet
 	//	*ObjectMeta_List
 	//	*ObjectMeta_ListItem
 	Type          isObjectMeta_Type `protobuf_oneof:"type"`
@@ -294,6 +295,15 @@ func (x *ObjectMeta) GetSet() *SetMeta {
 	return nil
 }
 
+func (x *ObjectMeta) GetSortedSet() *SortedSetMeta {
+	if x != nil {
+		if x, ok := x.Type.(*ObjectMeta_SortedSet); ok {
+			return x.SortedSet
+		}
+	}
+	return nil
+}
+
 func (x *ObjectMeta) GetList() *ListMeta {
 	if x != nil {
 		if x, ok := x.Type.(*ObjectMeta_List); ok {
@@ -324,17 +334,23 @@ type ObjectMeta_Set struct {
 	Set *SetMeta `protobuf:"bytes,5,opt,name=set,proto3,oneof"`
 }
 
+type ObjectMeta_SortedSet struct {
+	SortedSet *SortedSetMeta `protobuf:"bytes,6,opt,name=sorted_set,json=sortedSet,proto3,oneof"`
+}
+
 type ObjectMeta_List struct {
-	List *ListMeta `protobuf:"bytes,6,opt,name=list,proto3,oneof"`
+	List *ListMeta `protobuf:"bytes,7,opt,name=list,proto3,oneof"`
 }
 
 type ObjectMeta_ListItem struct {
-	ListItem *ListItemMeta `protobuf:"bytes,7,opt,name=list_item,json=listItem,proto3,oneof"`
+	ListItem *ListItemMeta `protobuf:"bytes,8,opt,name=list_item,json=listItem,proto3,oneof"`
 }
 
 func (*ObjectMeta_Basic) isObjectMeta_Type() {}
 
 func (*ObjectMeta_Set) isObjectMeta_Type() {}
+
+func (*ObjectMeta_SortedSet) isObjectMeta_Type() {}
 
 func (*ObjectMeta_List) isObjectMeta_Type() {}
 
@@ -452,6 +468,170 @@ func (x *SetMeta) GetSizeBytes() uint64 {
 	return 0
 }
 
+type SetMember struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Uid           uint64                 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Member        string                 `protobuf:"bytes,2,opt,name=member,proto3" json:"member,omitempty"`
+	Score         *float32               `protobuf:"fixed32,3,opt,name=score,proto3,oneof" json:"score,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMember) Reset() {
+	*x = SetMember{}
+	mi := &file_redis_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMember) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMember) ProtoMessage() {}
+
+func (x *SetMember) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMember.ProtoReflect.Descriptor instead.
+func (*SetMember) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SetMember) GetUid() uint64 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *SetMember) GetMember() string {
+	if x != nil {
+		return x.Member
+	}
+	return ""
+}
+
+func (x *SetMember) GetScore() float32 {
+	if x != nil && x.Score != nil {
+		return *x.Score
+	}
+	return 0
+}
+
+type SetMembers struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Members       []*SetMember           `protobuf:"bytes,1,rep,name=members,proto3" json:"members,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMembers) Reset() {
+	*x = SetMembers{}
+	mi := &file_redis_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMembers) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMembers) ProtoMessage() {}
+
+func (x *SetMembers) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMembers.ProtoReflect.Descriptor instead.
+func (*SetMembers) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *SetMembers) GetMembers() []*SetMember {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+type SortedSetMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NumItems      uint64                 `protobuf:"varint,1,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
+	NumChunks     uint32                 `protobuf:"varint,2,opt,name=num_chunks,json=numChunks,proto3" json:"num_chunks,omitempty"`
+	SizeBytes     uint64                 `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SortedSetMeta) Reset() {
+	*x = SortedSetMeta{}
+	mi := &file_redis_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SortedSetMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SortedSetMeta) ProtoMessage() {}
+
+func (x *SortedSetMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SortedSetMeta.ProtoReflect.Descriptor instead.
+func (*SortedSetMeta) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SortedSetMeta) GetNumItems() uint64 {
+	if x != nil {
+		return x.NumItems
+	}
+	return 0
+}
+
+func (x *SortedSetMeta) GetNumChunks() uint32 {
+	if x != nil {
+		return x.NumChunks
+	}
+	return 0
+}
+
+func (x *SortedSetMeta) GetSizeBytes() uint64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
 type ListMeta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NumItems      uint64                 `protobuf:"varint,1,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
@@ -463,7 +643,7 @@ type ListMeta struct {
 
 func (x *ListMeta) Reset() {
 	*x = ListMeta{}
-	mi := &file_redis_proto_msgTypes[5]
+	mi := &file_redis_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -475,7 +655,7 @@ func (x *ListMeta) String() string {
 func (*ListMeta) ProtoMessage() {}
 
 func (x *ListMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[5]
+	mi := &file_redis_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -488,7 +668,7 @@ func (x *ListMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMeta.ProtoReflect.Descriptor instead.
 func (*ListMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{5}
+	return file_redis_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListMeta) GetNumItems() uint64 {
@@ -525,7 +705,7 @@ type ListItemMeta struct {
 
 func (x *ListItemMeta) Reset() {
 	*x = ListItemMeta{}
-	mi := &file_redis_proto_msgTypes[6]
+	mi := &file_redis_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -537,7 +717,7 @@ func (x *ListItemMeta) String() string {
 func (*ListItemMeta) ProtoMessage() {}
 
 func (x *ListItemMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[6]
+	mi := &file_redis_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -550,7 +730,7 @@ func (x *ListItemMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListItemMeta.ProtoReflect.Descriptor instead.
 func (*ListItemMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{6}
+	return file_redis_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListItemMeta) GetId() string {
@@ -602,16 +782,18 @@ const file_redis_proto_rawDesc = "" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\x12(\n" +
 	"\x05rules\x18\x06 \x03(\v2\x12.types.UserACLRuleR\x05rules\";\n" +
 	"\vUserACLRule\x12,\n" +
-	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xf6\x02\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x16.types.UserAccessLevelR\x05level\"\xad\x03\n" +
 	"\n" +
 	"ObjectMeta\x124\n" +
 	"\acreated\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x124\n" +
 	"\aupdated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\aupdated\x129\n" +
 	"\aexpires\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampH\x01R\aexpires\x88\x01\x01\x12.\n" +
 	"\x05basic\x18\x04 \x01(\v2\x16.types.BasicObjectMetaH\x00R\x05basic\x12\"\n" +
-	"\x03set\x18\x05 \x01(\v2\x0e.types.SetMetaH\x00R\x03set\x12%\n" +
-	"\x04list\x18\x06 \x01(\v2\x0f.types.ListMetaH\x00R\x04list\x122\n" +
-	"\tlist_item\x18\a \x01(\v2\x13.types.ListItemMetaH\x00R\blistItemB\x06\n" +
+	"\x03set\x18\x05 \x01(\v2\x0e.types.SetMetaH\x00R\x03set\x125\n" +
+	"\n" +
+	"sorted_set\x18\x06 \x01(\v2\x14.types.SortedSetMetaH\x00R\tsortedSet\x12%\n" +
+	"\x04list\x18\a \x01(\v2\x0f.types.ListMetaH\x00R\x04list\x122\n" +
+	"\tlist_item\x18\b \x01(\v2\x13.types.ListItemMetaH\x00R\blistItemB\x06\n" +
 	"\x04typeB\n" +
 	"\n" +
 	"\b_expires\"O\n" +
@@ -621,6 +803,20 @@ const file_redis_proto_rawDesc = "" +
 	"\n" +
 	"size_bytes\x18\x02 \x01(\x04R\tsizeBytes\"d\n" +
 	"\aSetMeta\x12\x1b\n" +
+	"\tnum_items\x18\x01 \x01(\x04R\bnumItems\x12\x1d\n" +
+	"\n" +
+	"num_chunks\x18\x02 \x01(\rR\tnumChunks\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\"Z\n" +
+	"\tSetMember\x12\x10\n" +
+	"\x03uid\x18\x01 \x01(\x04R\x03uid\x12\x16\n" +
+	"\x06member\x18\x02 \x01(\tR\x06member\x12\x19\n" +
+	"\x05score\x18\x03 \x01(\x02H\x00R\x05score\x88\x01\x01B\b\n" +
+	"\x06_score\"8\n" +
+	"\n" +
+	"SetMembers\x12*\n" +
+	"\amembers\x18\x01 \x03(\v2\x10.types.SetMemberR\amembers\"j\n" +
+	"\rSortedSetMeta\x12\x1b\n" +
 	"\tnum_items\x18\x01 \x01(\x04R\bnumItems\x12\x1d\n" +
 	"\n" +
 	"num_chunks\x18\x02 \x01(\rR\tnumChunks\x12\x1d\n" +
@@ -657,7 +853,7 @@ func file_redis_proto_rawDescGZIP() []byte {
 }
 
 var file_redis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_redis_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_redis_proto_goTypes = []any{
 	(UserAccessLevel)(0),          // 0: types.UserAccessLevel
 	(*User)(nil),                  // 1: types.User
@@ -665,27 +861,32 @@ var file_redis_proto_goTypes = []any{
 	(*ObjectMeta)(nil),            // 3: types.ObjectMeta
 	(*BasicObjectMeta)(nil),       // 4: types.BasicObjectMeta
 	(*SetMeta)(nil),               // 5: types.SetMeta
-	(*ListMeta)(nil),              // 6: types.ListMeta
-	(*ListItemMeta)(nil),          // 7: types.ListItemMeta
-	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(*SetMember)(nil),             // 6: types.SetMember
+	(*SetMembers)(nil),            // 7: types.SetMembers
+	(*SortedSetMeta)(nil),         // 8: types.SortedSetMeta
+	(*ListMeta)(nil),              // 9: types.ListMeta
+	(*ListItemMeta)(nil),          // 10: types.ListItemMeta
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_redis_proto_depIdxs = []int32{
-	8,  // 0: types.User.created:type_name -> google.protobuf.Timestamp
-	8,  // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
+	11, // 0: types.User.created:type_name -> google.protobuf.Timestamp
+	11, // 1: types.User.last_login:type_name -> google.protobuf.Timestamp
 	2,  // 2: types.User.rules:type_name -> types.UserACLRule
 	0,  // 3: types.UserACLRule.level:type_name -> types.UserAccessLevel
-	8,  // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
-	8,  // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
-	8,  // 6: types.ObjectMeta.expires:type_name -> google.protobuf.Timestamp
+	11, // 4: types.ObjectMeta.created:type_name -> google.protobuf.Timestamp
+	11, // 5: types.ObjectMeta.updated:type_name -> google.protobuf.Timestamp
+	11, // 6: types.ObjectMeta.expires:type_name -> google.protobuf.Timestamp
 	4,  // 7: types.ObjectMeta.basic:type_name -> types.BasicObjectMeta
 	5,  // 8: types.ObjectMeta.set:type_name -> types.SetMeta
-	6,  // 9: types.ObjectMeta.list:type_name -> types.ListMeta
-	7,  // 10: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	8,  // 9: types.ObjectMeta.sorted_set:type_name -> types.SortedSetMeta
+	9,  // 10: types.ObjectMeta.list:type_name -> types.ListMeta
+	10, // 11: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
+	6,  // 12: types.SetMembers.members:type_name -> types.SetMember
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_redis_proto_init() }
@@ -696,16 +897,18 @@ func file_redis_proto_init() {
 	file_redis_proto_msgTypes[2].OneofWrappers = []any{
 		(*ObjectMeta_Basic)(nil),
 		(*ObjectMeta_Set)(nil),
+		(*ObjectMeta_SortedSet)(nil),
 		(*ObjectMeta_List)(nil),
 		(*ObjectMeta_ListItem)(nil),
 	}
+	file_redis_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_redis_proto_rawDesc), len(file_redis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
