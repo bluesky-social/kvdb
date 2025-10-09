@@ -901,6 +901,22 @@ func TestSets(t *testing.T) {
 	require.Equal(resp.FormatInt(1), res)
 }
 
+func TestEncodeSortedSetScore(t *testing.T) {
+	// spot check a couple values
+	require.Equal(t, []byte{0x40, 0x3f, 0xff, 0xff}, []byte(encodeSortedSetScore(-1.5)))
+	require.Equal(t, []byte{0xc0, 0x00, 0x00, 0x00}, []byte(encodeSortedSetScore(2.0)))
+
+	// perform many operations and ensure that sort order holds
+	f := float32(-100)
+	last := encodeSortedSetScore(f)
+	for range 100 {
+		f += 1.5
+		current := encodeSortedSetScore(f)
+		require.True(t, last < current)
+		last = current
+	}
+}
+
 func TestOrderedSets(t *testing.T) {
 	require := require.New(t)
 	ctx := t.Context()
