@@ -49,6 +49,16 @@ message SetMeta {
   uint64 size_bytes = 3;
 }
 
+message SetMember {
+  uint64 uid = 1;
+  string member = 2;
+  optional float score = 3;
+}
+
+message SetMembers {
+  repeated SetMember members = 1;
+}
+
 message SortedSetMeta {
   uint64 num_items = 1;
   uint32 num_chunks = 2;
@@ -67,14 +77,4 @@ message ListItemMeta {
   string previous = 3;
   uint32 num_chunks = 4;
   uint64 size_bytes = 5;
-}
-
-message UIDItem {
-  string member = 1;
-  uint64 uid = 2;
-  optional float score = 3;
-}
-
-message UIDItems {
-  repeated UIDItem items = 1;
 }

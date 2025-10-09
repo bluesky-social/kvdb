@@ -468,6 +468,110 @@ func (x *SetMeta) GetSizeBytes() uint64 {
 	return 0
 }
 
+type SetMember struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Uid           uint64                 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Member        string                 `protobuf:"bytes,2,opt,name=member,proto3" json:"member,omitempty"`
+	Score         *float32               `protobuf:"fixed32,3,opt,name=score,proto3,oneof" json:"score,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMember) Reset() {
+	*x = SetMember{}
+	mi := &file_redis_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMember) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMember) ProtoMessage() {}
+
+func (x *SetMember) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMember.ProtoReflect.Descriptor instead.
+func (*SetMember) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SetMember) GetUid() uint64 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *SetMember) GetMember() string {
+	if x != nil {
+		return x.Member
+	}
+	return ""
+}
+
+func (x *SetMember) GetScore() float32 {
+	if x != nil && x.Score != nil {
+		return *x.Score
+	}
+	return 0
+}
+
+type SetMembers struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Members       []*SetMember           `protobuf:"bytes,1,rep,name=members,proto3" json:"members,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMembers) Reset() {
+	*x = SetMembers{}
+	mi := &file_redis_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMembers) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMembers) ProtoMessage() {}
+
+func (x *SetMembers) ProtoReflect() protoreflect.Message {
+	mi := &file_redis_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMembers.ProtoReflect.Descriptor instead.
+func (*SetMembers) Descriptor() ([]byte, []int) {
+	return file_redis_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *SetMembers) GetMembers() []*SetMember {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
 type SortedSetMeta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NumItems      uint64                 `protobuf:"varint,1,opt,name=num_items,json=numItems,proto3" json:"num_items,omitempty"`
@@ -479,7 +583,7 @@ type SortedSetMeta struct {
 
 func (x *SortedSetMeta) Reset() {
 	*x = SortedSetMeta{}
-	mi := &file_redis_proto_msgTypes[5]
+	mi := &file_redis_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -491,7 +595,7 @@ func (x *SortedSetMeta) String() string {
 func (*SortedSetMeta) ProtoMessage() {}
 
 func (x *SortedSetMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[5]
+	mi := &file_redis_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -504,7 +608,7 @@ func (x *SortedSetMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SortedSetMeta.ProtoReflect.Descriptor instead.
 func (*SortedSetMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{5}
+	return file_redis_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SortedSetMeta) GetNumItems() uint64 {
@@ -539,7 +643,7 @@ type ListMeta struct {
 
 func (x *ListMeta) Reset() {
 	*x = ListMeta{}
-	mi := &file_redis_proto_msgTypes[6]
+	mi := &file_redis_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -551,7 +655,7 @@ func (x *ListMeta) String() string {
 func (*ListMeta) ProtoMessage() {}
 
 func (x *ListMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[6]
+	mi := &file_redis_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -564,7 +668,7 @@ func (x *ListMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMeta.ProtoReflect.Descriptor instead.
 func (*ListMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{6}
+	return file_redis_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListMeta) GetNumItems() uint64 {
@@ -601,7 +705,7 @@ type ListItemMeta struct {
 
 func (x *ListItemMeta) Reset() {
 	*x = ListItemMeta{}
-	mi := &file_redis_proto_msgTypes[7]
+	mi := &file_redis_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -613,7 +717,7 @@ func (x *ListItemMeta) String() string {
 func (*ListItemMeta) ProtoMessage() {}
 
 func (x *ListItemMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[7]
+	mi := &file_redis_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -626,7 +730,7 @@ func (x *ListItemMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListItemMeta.ProtoReflect.Descriptor instead.
 func (*ListItemMeta) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{7}
+	return file_redis_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListItemMeta) GetId() string {
@@ -662,110 +766,6 @@ func (x *ListItemMeta) GetSizeBytes() uint64 {
 		return x.SizeBytes
 	}
 	return 0
-}
-
-type UIDItem struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Member        string                 `protobuf:"bytes,1,opt,name=member,proto3" json:"member,omitempty"`
-	Uid           uint64                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"`
-	Score         *float32               `protobuf:"fixed32,3,opt,name=score,proto3,oneof" json:"score,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UIDItem) Reset() {
-	*x = UIDItem{}
-	mi := &file_redis_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UIDItem) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UIDItem) ProtoMessage() {}
-
-func (x *UIDItem) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UIDItem.ProtoReflect.Descriptor instead.
-func (*UIDItem) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *UIDItem) GetMember() string {
-	if x != nil {
-		return x.Member
-	}
-	return ""
-}
-
-func (x *UIDItem) GetUid() uint64 {
-	if x != nil {
-		return x.Uid
-	}
-	return 0
-}
-
-func (x *UIDItem) GetScore() float32 {
-	if x != nil && x.Score != nil {
-		return *x.Score
-	}
-	return 0
-}
-
-type UIDItems struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Items         []*UIDItem             `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UIDItems) Reset() {
-	*x = UIDItems{}
-	mi := &file_redis_proto_msgTypes[9]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UIDItems) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UIDItems) ProtoMessage() {}
-
-func (x *UIDItems) ProtoReflect() protoreflect.Message {
-	mi := &file_redis_proto_msgTypes[9]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UIDItems.ProtoReflect.Descriptor instead.
-func (*UIDItems) Descriptor() ([]byte, []int) {
-	return file_redis_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *UIDItems) GetItems() []*UIDItem {
-	if x != nil {
-		return x.Items
-	}
-	return nil
 }
 
 var File_redis_proto protoreflect.FileDescriptor
@@ -807,7 +807,15 @@ const file_redis_proto_rawDesc = "" +
 	"\n" +
 	"num_chunks\x18\x02 \x01(\rR\tnumChunks\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\"j\n" +
+	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\"Z\n" +
+	"\tSetMember\x12\x10\n" +
+	"\x03uid\x18\x01 \x01(\x04R\x03uid\x12\x16\n" +
+	"\x06member\x18\x02 \x01(\tR\x06member\x12\x19\n" +
+	"\x05score\x18\x03 \x01(\x02H\x00R\x05score\x88\x01\x01B\b\n" +
+	"\x06_score\"8\n" +
+	"\n" +
+	"SetMembers\x12*\n" +
+	"\amembers\x18\x01 \x03(\v2\x10.types.SetMemberR\amembers\"j\n" +
 	"\rSortedSetMeta\x12\x1b\n" +
 	"\tnum_items\x18\x01 \x01(\x04R\bnumItems\x12\x1d\n" +
 	"\n" +
@@ -825,14 +833,7 @@ const file_redis_proto_rawDesc = "" +
 	"\n" +
 	"num_chunks\x18\x04 \x01(\rR\tnumChunks\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\"X\n" +
-	"\aUIDItem\x12\x16\n" +
-	"\x06member\x18\x01 \x01(\tR\x06member\x12\x10\n" +
-	"\x03uid\x18\x02 \x01(\x04R\x03uid\x12\x19\n" +
-	"\x05score\x18\x03 \x01(\x02H\x00R\x05score\x88\x01\x01B\b\n" +
-	"\x06_score\"0\n" +
-	"\bUIDItems\x12$\n" +
-	"\x05items\x18\x01 \x03(\v2\x0e.types.UIDItemR\x05items*\x97\x01\n" +
+	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes*\x97\x01\n" +
 	"\x0fUserAccessLevel\x12!\n" +
 	"\x1dUSER_ACCESS_LEVEL_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fUSER_ACCESS_LEVEL_CLUSTER_ADMIN\x10\x01\x12 \n" +
@@ -860,11 +861,11 @@ var file_redis_proto_goTypes = []any{
 	(*ObjectMeta)(nil),            // 3: types.ObjectMeta
 	(*BasicObjectMeta)(nil),       // 4: types.BasicObjectMeta
 	(*SetMeta)(nil),               // 5: types.SetMeta
-	(*SortedSetMeta)(nil),         // 6: types.SortedSetMeta
-	(*ListMeta)(nil),              // 7: types.ListMeta
-	(*ListItemMeta)(nil),          // 8: types.ListItemMeta
-	(*UIDItem)(nil),               // 9: types.UIDItem
-	(*UIDItems)(nil),              // 10: types.UIDItems
+	(*SetMember)(nil),             // 6: types.SetMember
+	(*SetMembers)(nil),            // 7: types.SetMembers
+	(*SortedSetMeta)(nil),         // 8: types.SortedSetMeta
+	(*ListMeta)(nil),              // 9: types.ListMeta
+	(*ListItemMeta)(nil),          // 10: types.ListItemMeta
 	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_redis_proto_depIdxs = []int32{
@@ -877,10 +878,10 @@ var file_redis_proto_depIdxs = []int32{
 	11, // 6: types.ObjectMeta.expires:type_name -> google.protobuf.Timestamp
 	4,  // 7: types.ObjectMeta.basic:type_name -> types.BasicObjectMeta
 	5,  // 8: types.ObjectMeta.set:type_name -> types.SetMeta
-	6,  // 9: types.ObjectMeta.sorted_set:type_name -> types.SortedSetMeta
-	7,  // 10: types.ObjectMeta.list:type_name -> types.ListMeta
-	8,  // 11: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
-	9,  // 12: types.UIDItems.items:type_name -> types.UIDItem
+	8,  // 9: types.ObjectMeta.sorted_set:type_name -> types.SortedSetMeta
+	9,  // 10: types.ObjectMeta.list:type_name -> types.ListMeta
+	10, // 11: types.ObjectMeta.list_item:type_name -> types.ListItemMeta
+	6,  // 12: types.SetMembers.members:type_name -> types.SetMember
 	13, // [13:13] is the sub-list for method output_type
 	13, // [13:13] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
@@ -900,7 +901,7 @@ func file_redis_proto_init() {
 		(*ObjectMeta_List)(nil),
 		(*ObjectMeta_ListItem)(nil),
 	}
-	file_redis_proto_msgTypes[8].OneofWrappers = []any{}
+	file_redis_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

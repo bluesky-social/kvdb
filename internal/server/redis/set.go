@@ -58,23 +58,7 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, kind
 		return 0, nil, fmt.Errorf("number of members does not match number of scores")
 	}
 
-	// look up or allocate a new UID for each set member
-	uids := make([]uint64, 0, len(members))
-	for ndx, member := range members {
-		item := &types.UIDItem{Member: member}
-		if len(scores) > 0 {
-			item.Score = &scores[ndx]
-		}
-
-		uid, err := s.getOrAllocateUID(ctx, tx, item)
-		if err != nil {
-			return 0, nil, fmt.Errorf("failed to get uid for member: %w", err)
-		}
-		uids = append(uids, uid)
-		item.Uid = uid
-	}
-
-	// get the bitmap if it exists
+	// get the set if it exists
 	meta, blob, err := s.getObject(ctx, tx, kind, key)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to get existing set: %w", err)
@@ -92,6 +76,22 @@ func (s *session) createOrAddToSet(ctx context.Context, tx fdb.Transaction, kind
 		if !kindOK {
 			return 0, nil, errWrongKind
 		}
+	}
+
+	// look up or allocate a new UID for each set member
+	uids := make([]uint64, 0, len(members))
+	for ndx, memberStr := range members {
+		member := &types.SetMember{Member: memberStr}
+		if len(scores) > 0 {
+			member.Score = &scores[ndx]
+		}
+
+		uid, err := s.getOrAllocateUID(ctx, tx, member)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to get uid for member: %w", err)
+		}
+		uids = append(uids, uid)
+		member.Uid = uid
 	}
 
 	// if the key doesn't exist, create a new bitmap
@@ -637,9 +637,9 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 			return uint64(0), fmt.Errorf("failed to open score dir: %w", err)
 		}
 
-		// clear the previous priority values for the items with this score, if any
+		// clear the previous priority values for the members with this score, if any
 		for scoreNdx, score := range scores {
-			newItem := &types.UIDItem{
+			newMember := &types.SetMember{
 				Member: members[scoreNdx],
 				Uid:    uids[scoreNdx],
 				Score:  &score,
@@ -647,21 +647,21 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 
 			scoreKey := scoreDir.Pack(tuple.Tuple{encodeSortedSetScore(score)})
 
-			items := &types.UIDItems{}
-			exists, err := getProtoItem(tx, scoreKey.FDBKey(), items)
+			setMembers := &types.SetMembers{}
+			exists, err := getProtoItem(tx, scoreKey.FDBKey(), setMembers)
 			if err != nil {
 				return uint64(0), fmt.Errorf("failed to unmarshal uid item: %w", err)
 			}
 
 			if !exists {
 				// create new
-				items.Items = append(items.Items, newItem)
+				setMembers.Members = append(setMembers.Members, newMember)
 			} else {
 				found := false
-				for _, existingItem := range items.Items {
-					if existingItem.Uid == newItem.Uid {
+				for _, existing := range setMembers.Members {
+					if existing.Uid == newMember.Uid {
 						// update existing
-						existingItem.Score = &score
+						existing.Score = &score
 						found = true
 						break
 					}
@@ -669,12 +669,12 @@ func (s *session) handleZAdd(ctx context.Context, args []resp.Value) (string, er
 
 				if !found {
 					// create new
-					items.Items = append(items.Items, newItem)
+					setMembers.Members = append(setMembers.Members, newMember)
 				}
 			}
 
 			// store the sortable score -> UID mapping
-			if err := setProtoItem(tx, scoreKey, items); err != nil {
+			if err := setProtoItem(tx, scoreKey, setMembers); err != nil {
 				return uint64(0), err
 			}
 		}
@@ -788,12 +788,12 @@ func (s *session) handleZCount(ctx context.Context, args []resp.Value) (string, 
 			}
 
 			// count the number of items with this score
-			items := &types.UIDItems{}
+			items := &types.SetMembers{}
 			if err := proto.Unmarshal(kv.Value, items); err != nil {
 				return uint64(0), fmt.Errorf("failed to unmarshal uid items: %w", err)
 			}
 
-			count += uint64(len(items.Items))
+			count += uint64(len(items.Members))
 		}
 
 		return count, nil
@@ -888,11 +888,11 @@ func (s *session) handleZRemRangeByScore(ctx context.Context, args []resp.Value)
 			}
 
 			// get the UID for the items, which will be deleted in batch later
-			items := &types.UIDItems{}
+			items := &types.SetMembers{}
 			if err := proto.Unmarshal(kv.Value, items); err != nil {
 				return uint64(0), fmt.Errorf("failed to unmarshal uid item: %w", err)
 			}
-			for _, item := range items.Items {
+			for _, item := range items.Members {
 				uids = append(uids, item.Uid)
 			}
 
