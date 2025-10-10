@@ -99,6 +99,7 @@ func InitAdminUser(db fdb.Database, dirs *Directories, username, password string
 		Created:      now,
 		LastLogin:    now,
 		Enabled:      true,
+		Version:      "v0",
 		Rules: []*types.UserACLRule{{
 			Level: types.UserAccessLevel_USER_ACCESS_LEVEL_CLUSTER_ADMIN,
 		}},

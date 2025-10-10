@@ -13,6 +13,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const (
+	version0 = "v0"
+)
+
 var (
 	errInvalidCredentials = errors.New("invalid credentials")
 )
@@ -76,6 +80,10 @@ func (s *session) handleAuth(ctx context.Context, args []resp.Value) (string, er
 	if err := comparePasswords(user.PasswordHash, pass); err != nil {
 		metrics.SpanOK(span)
 		return resp.FormatError(errInvalidCredentials), nil
+	}
+
+	if user.Version != version0 {
+		return "", recordErr(span, fmt.Errorf("user version %q not supported", user.Version))
 	}
 
 	if err := s.setSessionUser(user); err != nil {
@@ -234,6 +242,7 @@ func (s *session) handleACL(ctx context.Context, args []resp.Value) (string, err
 		Created:      now,
 		LastLogin:    now,
 		Enabled:      true,
+		Version:      version0,
 		Rules: []*types.UserACLRule{{
 			Level: types.UserAccessLevel_USER_ACCESS_LEVEL_READ_WRITE,
 		}},
